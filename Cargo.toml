@@ -1,0 +1,23 @@
+[package]
+name = "anubis-argon2"
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+blake2 = { version = "0.11", default-features = false }
+
+[dev-dependencies]
+argon2 = { path = "../argon2-fast" }
+
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+all = { level = "deny", priority = -1 }
+pedantic = { level = "deny", priority = -1 }
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+todo = "deny"
+unimplemented = "deny"
