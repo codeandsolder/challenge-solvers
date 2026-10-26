@@ -337,14 +337,16 @@ fn store_vec(block: &mut Block, i: usize, value: V) {
 
 #[inline(always)]
 fn compress(state: &mut State, rhs: &Block, next: &mut Block, with_xor: bool) {
-    for (i, value) in state.iter_mut().enumerate() {
-        *value ^= load_vec(rhs, i);
-        let saved = if with_xor {
-            *value ^ load_vec(next, i)
-        } else {
-            *value
-        };
-        store_vec(next, i, saved);
+    if with_xor {
+        for (i, value) in state.iter_mut().enumerate() {
+            *value ^= load_vec(rhs, i);
+            store_vec(next, i, *value ^ load_vec(next, i));
+        }
+    } else {
+        for (i, value) in state.iter_mut().enumerate() {
+            *value ^= load_vec(rhs, i);
+            store_vec(next, i, *value);
+        }
     }
 
     for i in 0..4 {
