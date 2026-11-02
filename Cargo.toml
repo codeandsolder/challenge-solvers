@@ -8,7 +8,7 @@ license = "MIT OR Apache-2.0"
 blake2 = { version = "0.11", default-features = false }
 
 [dev-dependencies]
-argon2 = { path = "../argon2-fast" }
+argon2 = { path = "../../vendor/argon2-fast" }
 
 [lints.rust]
 unsafe_code = "deny"
