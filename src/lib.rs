@@ -100,9 +100,12 @@ pub fn hash(password: &[u8], salt: [u8; 8], memory: &mut Memory) -> Option<[u8; 
     Some(finalize(&memory.blocks[MEMORY_KIB - 1]))
 }
 
-#[expect(
-    unsafe_code,
-    reason = "runtime AVX2 detection guards the single target-feature call boundary"
+#[cfg_attr(
+    any(target_arch = "x86", target_arch = "x86_64"),
+    expect(
+        unsafe_code,
+        reason = "runtime AVX2 detection guards the single target-feature call boundary"
+    )
 )]
 fn fill(memory: &mut [Block], independent_refs: &[usize], backend: Backend) -> Option<()> {
     match backend {
