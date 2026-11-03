@@ -332,7 +332,7 @@ fn load(block: &Block) -> State {
 }
 
 #[inline(always)]
-fn load_vec(block: &Block, i: usize) -> V {
+const fn load_vec(block: &Block, i: usize) -> V {
     let base = i * 4;
     V::from_array([
         block.0[base],
@@ -343,7 +343,7 @@ fn load_vec(block: &Block, i: usize) -> V {
 }
 
 #[inline(always)]
-fn store_vec(block: &mut Block, i: usize, value: V) {
+const fn store_vec(block: &mut Block, i: usize, value: V) {
     let base = i * 4;
     let lanes = value.to_array();
     block.0[base] = lanes[0];
