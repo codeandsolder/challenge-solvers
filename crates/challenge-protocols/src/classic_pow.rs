@@ -115,27 +115,34 @@ where
 }
 
 fn require_x86_feature(implementation: Implementation) -> anyhow::Result<()> {
-    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-    {
-        match implementation {
-            Implementation::Avx2 if !std::arch::is_x86_feature_detected!("avx2") => {
-                bail!("AVX2 unavailable on this CPU")
-            }
-            Implementation::ShaNi if !std::arch::is_x86_feature_detected!("sha") => {
-                bail!("SHA-NI unavailable on this CPU")
-            }
-            #[cfg(target_arch = "x86_64")]
-            Implementation::Avx512 if !std::arch::is_x86_feature_detected!("avx512f") => {
-                bail!("AVX-512 unavailable on this CPU")
-            }
-            _ => Ok(()),
+    #[cfg(not(feature = "portable-simd"))]
+    ensure!(
+        matches!(implementation, Implementation::Auto | Implementation::Safe),
+        "explicit accelerated backends require the portable-simd feature"
+    );
+    #[cfg(all(
+        feature = "portable-simd",
+        any(target_arch = "x86", target_arch = "x86_64")
+    ))]
+    match implementation {
+        Implementation::Avx2 if !std::arch::is_x86_feature_detected!("avx2") => {
+            bail!("AVX2 unavailable on this CPU")
         }
+        Implementation::ShaNi if !std::arch::is_x86_feature_detected!("sha") => {
+            bail!("SHA-NI unavailable on this CPU")
+        }
+        #[cfg(target_arch = "x86_64")]
+        Implementation::Avx512 if !std::arch::is_x86_feature_detected!("avx512f") => {
+            bail!("AVX-512 unavailable on this CPU")
+        }
+        _ => {}
     }
     #[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
-    match implementation {
-        Implementation::Auto | Implementation::Safe => Ok(()),
-        _ => bail!("requested x86 implementation on a non-x86 host"),
-    }
+    ensure!(
+        matches!(implementation, Implementation::Auto | Implementation::Safe),
+        "requested x86 implementation on a non-x86 host"
+    );
+    Ok(())
 }
 
 fn decimal_solver(
@@ -148,20 +155,23 @@ fn decimal_solver(
         Implementation::Safe => Ok(Box::new(
             challenge_solvers::solver::safe::DecimalSolver::from(message),
         )),
-        #[cfg(target_arch = "x86_64")]
+        #[cfg(all(feature = "portable-simd", target_arch = "x86_64"))]
         Implementation::Avx2 => Ok(Box::new(
             challenge_solvers::solver::x86::Avx2DecimalSolver::from(message),
         )),
-        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        #[cfg(all(
+            feature = "portable-simd",
+            any(target_arch = "x86", target_arch = "x86_64")
+        ))]
         Implementation::ShaNi => Ok(Box::new(
             challenge_solvers::solver::sha_ni::DecimalSolver::from(message),
         )),
-        #[cfg(target_arch = "x86_64")]
+        #[cfg(all(feature = "portable-simd", target_arch = "x86_64"))]
         Implementation::Avx512 => Ok(Box::new(
             challenge_solvers::solver::x86::Avx512DecimalSolver::from(message),
         )),
         #[cfg_attr(
-            target_arch = "x86_64",
+            all(feature = "portable-simd", target_arch = "x86_64"),
             expect(
                 unreachable_patterns,
                 reason = "all solver implementations in this match are available on x86_64"
@@ -189,11 +199,11 @@ pub fn binary_solver(
         Implementation::Safe => Ok(Box::new(
             challenge_solvers::solver::safe::BinarySolver::from(message),
         )),
-        #[cfg(target_arch = "x86_64")]
+        #[cfg(all(feature = "portable-simd", target_arch = "x86_64"))]
         Implementation::Avx2 => Ok(Box::new(
             challenge_solvers::solver::x86::Avx2BinarySolver::from(message),
         )),
-        #[cfg(target_arch = "x86_64")]
+        #[cfg(all(feature = "portable-simd", target_arch = "x86_64"))]
         Implementation::Avx512 => Ok(Box::new(
             challenge_solvers::solver::x86::Avx512BinarySolver::from(message),
         )),
@@ -211,20 +221,23 @@ fn goaway_solver(
         Implementation::Safe => Ok(Box::new(
             challenge_solvers::solver::safe::GoAwaySolver::from(message),
         )),
-        #[cfg(target_arch = "x86_64")]
+        #[cfg(all(feature = "portable-simd", target_arch = "x86_64"))]
         Implementation::Avx2 => Ok(Box::new(
             challenge_solvers::solver::x86::Avx2GoAwaySolver::from(message),
         )),
-        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        #[cfg(all(
+            feature = "portable-simd",
+            any(target_arch = "x86", target_arch = "x86_64")
+        ))]
         Implementation::ShaNi => Ok(Box::new(
             challenge_solvers::solver::sha_ni::GoAwaySolver::from(message),
         )),
-        #[cfg(target_arch = "x86_64")]
+        #[cfg(all(feature = "portable-simd", target_arch = "x86_64"))]
         Implementation::Avx512 => Ok(Box::new(
             challenge_solvers::solver::x86::Avx512GoAwaySolver::from(message),
         )),
         #[cfg_attr(
-            target_arch = "x86_64",
+            all(feature = "portable-simd", target_arch = "x86_64"),
             expect(
                 unreachable_patterns,
                 reason = "all solver implementations in this match are available on x86_64"
@@ -248,11 +261,11 @@ fn cerberus_solver(
         Implementation::Safe => Ok(Box::new(
             challenge_solvers::solver::safe::CerberusSolver::from(message),
         )),
-        #[cfg(target_arch = "x86_64")]
+        #[cfg(all(feature = "portable-simd", target_arch = "x86_64"))]
         Implementation::Avx2 => Ok(Box::new(
             challenge_solvers::solver::x86::Avx2CerberusSolver::from(message),
         )),
-        #[cfg(target_arch = "x86_64")]
+        #[cfg(all(feature = "portable-simd", target_arch = "x86_64"))]
         Implementation::Avx512 => Ok(Box::new(
             challenge_solvers::solver::x86::Avx512CerberusSolver::from(message),
         )),

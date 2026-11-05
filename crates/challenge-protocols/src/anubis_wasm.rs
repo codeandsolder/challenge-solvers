@@ -8,7 +8,6 @@ use std::{
     time::Instant,
 };
 
-use anubis_argon2::Memory as Argon2Memory;
 use anyhow::{Context, ensure};
 use challenge_solvers::message::BinaryMessage;
 use challenge_solvers::solver::SOLVE_TYPE_MASK;
@@ -22,7 +21,10 @@ use crate::{
 
 const SEARCH_SPACE: u64 = 1_u64 << 32;
 const MAX_DIFFICULTY: u32 = 64;
+#[cfg(feature = "portable-simd")]
 pub const ARGON2_IMPLEMENTATION: &str = "portable-simd";
+#[cfg(not(feature = "portable-simd"))]
+pub const ARGON2_IMPLEMENTATION: &str = "argon2-0.6.0";
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Challenge {
@@ -99,23 +101,57 @@ fn sha256_hash(data: &[u8], nonce: u32) -> [u8; 32] {
     hasher.finalize().into()
 }
 
-fn argon2id_hash_with_memory(
-    data: &[u8],
-    nonce: u32,
-    memory: &mut Argon2Memory,
-) -> anyhow::Result<[u8; 32]> {
-    let nonce = u64::from(nonce);
-    let salt = if use_little_endian_nonce(data) {
-        nonce.to_le_bytes()
-    } else {
-        nonce.to_be_bytes()
-    };
-    anubis_argon2::hash(data, salt, memory).context("specialized Argon2id hash failed")
+// One reusable Argon2 arena/configuration per worker, independently of the
+// selected optimized or stable-Rust backend.
+#[cfg(feature = "portable-simd")]
+struct Argon2Worker(anubis_argon2::Memory);
+
+#[cfg(not(feature = "portable-simd"))]
+struct Argon2Worker(argon2::Argon2<'static>);
+
+impl Argon2Worker {
+    fn new() -> anyhow::Result<Self> {
+        #[cfg(feature = "portable-simd")]
+        {
+            Ok(Self(anubis_argon2::Memory::new()))
+        }
+        #[cfg(not(feature = "portable-simd"))]
+        {
+            use argon2::{Algorithm, Argon2, Params, Version};
+            let params = Params::new(19 * 1024, 2, 1, Some(32))
+                .context("invalid Anubis Argon2id parameters")?;
+            Ok(Self(Argon2::new(
+                Algorithm::Argon2id,
+                Version::V0x13,
+                params,
+            )))
+        }
+    }
+
+    fn hash(&mut self, data: &[u8], nonce: u32) -> anyhow::Result<[u8; 32]> {
+        let nonce = u64::from(nonce);
+        let salt = if use_little_endian_nonce(data) {
+            nonce.to_le_bytes()
+        } else {
+            nonce.to_be_bytes()
+        };
+        #[cfg(feature = "portable-simd")]
+        {
+            anubis_argon2::hash(data, salt, &mut self.0).context("specialized Argon2id hash failed")
+        }
+        #[cfg(not(feature = "portable-simd"))]
+        {
+            let mut result = [0_u8; 32];
+            self.0
+                .hash_password_into(data, &salt, &mut result)
+                .context("Argon2id hash failed")?;
+            Ok(result)
+        }
+    }
 }
 
 fn argon2id_hash(data: &[u8], nonce: u32) -> anyhow::Result<[u8; 32]> {
-    let mut memory = Argon2Memory::new();
-    argon2id_hash_with_memory(data, nonce, &mut memory)
+    Argon2Worker::new()?.hash(data, nonce)
 }
 
 /// Validate a WASM Anubis SHA-256 proof, including protocol nonce byte order.
@@ -257,7 +293,7 @@ pub fn solve_argon2id(
     ensure!(
         matches!(
             implementation,
-            None | Some(ARGON2_IMPLEMENTATION | "argon2-0.6.0" | "argon2-0.5.3")
+            None | Some("portable-simd" | "argon2-0.6.0" | "argon2-0.5.3")
         ),
         "unsupported Argon2id implementation: {}",
         implementation.unwrap_or_default()
@@ -275,12 +311,12 @@ pub fn solve_argon2id(
             let winner = &winner;
             let data = &data;
             handles.push(scope.spawn(move || -> anyhow::Result<()> {
-                let mut memory = Argon2Memory::new();
+                let mut worker_memory = Argon2Worker::new()?;
                 let mut nonce = u64::try_from(worker).context("Argon2id worker index overflow")?;
 
                 while nonce < SEARCH_SPACE && nonce < best_nonce.load(Ordering::Acquire) {
                     let protocol_nonce = u32::try_from(nonce).context("Argon2id nonce overflow")?;
-                    let hash = argon2id_hash_with_memory(data, protocol_nonce, &mut memory)?;
+                    let hash = worker_memory.hash(data, protocol_nonce)?;
                     if has_leading_zero_bits(&hash, challenge.difficulty) {
                         let previous = best_nonce.fetch_min(nonce, Ordering::AcqRel);
                         if nonce < previous {
@@ -382,12 +418,34 @@ mod tests {
     #[test]
     fn argon2id_reused_memory_matches_fresh_hashes() -> anyhow::Result<()> {
         let data = hex::decode("0011223344556680")?;
-        let mut memory = Argon2Memory::new();
+        let mut worker_memory = Argon2Worker::new()?;
         for nonce in [0, 1, 2, 17] {
             assert_eq!(
-                argon2id_hash_with_memory(&data, nonce, &mut memory)?,
+                worker_memory.hash(&data, nonce)?,
                 argon2id_hash(&data, nonce)?
             );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn argon2id_backend_matches_reference_for_both_nonce_endiannesses() -> anyhow::Result<()> {
+        use argon2::{Algorithm, Argon2, Params, Version};
+        let params = Params::new(19 * 1024, 2, 1, Some(32))?;
+        let reference = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
+        for encoded in ["001122334455667f", "0011223344556680"] {
+            let data = hex::decode(encoded)?;
+            let mut worker_memory = Argon2Worker::new()?;
+            for nonce in [0_u32, 17] {
+                let salt = if use_little_endian_nonce(&data) {
+                    u64::from(nonce).to_le_bytes()
+                } else {
+                    u64::from(nonce).to_be_bytes()
+                };
+                let mut digest = [0_u8; 32];
+                reference.hash_password_into(&data, &salt, &mut digest)?;
+                assert_eq!(worker_memory.hash(&data, nonce)?, digest);
+            }
         }
         Ok(())
     }

@@ -23,6 +23,47 @@ See the individual packages for feature sets and backends. The service layer (HT
 challenge-disasterer. The service is not yet wired to consume these extracted
 crates; the removal of its former in-tree solver sources is the next step.
 
+## Use from another Rust project
+
+The protocol crate is importable directly from this repository, independently
+of the HTTP service. Until registry publication, use the repository branch; Cargo.lock records the
+selected Git commit. For production consumers, replace `branch` with the exact
+validated `rev` (the workspace resolves its own internal solver dependency):
+
+```toml
+[dependencies]
+challenge-protocols = { git = "https://github.com/codeandsolder/challenge-solvers", branch = "main" }
+```
+
+```rust
+use challenge_protocols::anubis;
+
+let challenge = anubis::Challenge {
+    data: "example".to_owned(),
+    difficulty: 1,
+};
+let result = anubis::solve_cpu(&challenge, 1_000_000)
+    .expect("valid bounded challenge");
+assert!(anubis::verify(&challenge, &result.answer));
+```
+
+The default `challenge-protocols` feature enables the optimized portable-SIMD
+kernels and specialized Anubis Argon2id engine on pinned nightly Rust. To
+consume all protocol implementations on stable Rust 1.99 instead, disable the
+default feature:
+
+```toml
+challenge-protocols = { git = "https://github.com/codeandsolder/challenge-solvers", branch = "main", default-features = false }
+```
+
+This retains the same protocol API, including Anubis Argon2id, using a portable
+RustCrypto implementation for memory-hard hashing and scalar SHA search.
+
+`challenge-protocols` also provides `classic_pow::solve` for ALTCHA,
+Cap.js, Cerberus, go-away, haphash, mCaptcha, and Linear.pub, plus Anubis WASM
+SHA-256 and Argon2id. Protocol parsing, proof encoding and verification remain
+inside the crate; HTTP dispatch, routing and telemetry do not.
+
 ## Performance policy
 
 **Portable SIMD is a default backend, not an afterthought.** The workspace
