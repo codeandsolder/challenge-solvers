@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/challenge-solvers", "crates/anubis-argon2"]
+members = ["crates/challenge-solvers", "crates/anubis-argon2", "crates/challenge-protocols"]
 resolver = "3"
 exclude = ["vendor/argon2-fast"]
 

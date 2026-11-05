@@ -1,0 +1,32 @@
+[package]
+name = "challenge-protocols"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.99"
+license = "MIT OR Apache-2.0"
+description = "Protocol-level proof-of-work solvers built on optimized shared Rust kernels"
+repository = "https://github.com/codeandsolder/challenge-solvers"
+publish = false
+
+[features]
+default = []
+gpu = ["challenge-solvers/gpu", "challenge-solvers/compare-64bit"]
+
+[dependencies]
+anyhow = "1"
+argon2 = { path = "../../vendor/argon2-fast" }
+anubis-argon2 = { path = "../anubis-argon2" }
+challenge-solvers = { path = "../challenge-solvers", default-features = true, features = ["all-challenges"] }
+hashwx = { git = "https://github.com/codeandsolder/hashwx-rs", rev = "9c69f0f8a30d4528c46c39ce1972eea1cde8e177", default-features = false, features = ["native", "hashx"] }
+hex = "0.4"
+itoa = "1"
+num-bigint = "0.5"
+pbkdf2 = "0.13"
+scrypt = "0.12"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha1 = { version = "0.11", default-features = false }
+sha2 = "0.11"
+
+[lints]
+workspace = true

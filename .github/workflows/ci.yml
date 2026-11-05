@@ -25,6 +25,7 @@ jobs:
         cargo fmt --all -- --check
         cargo test --locked -p challenge-solvers --all-features
         cargo test --locked -p anubis-argon2
+        cargo test --locked -p challenge-protocols --all-features
         cargo clippy --locked --workspace --all-targets --all-features -- -D warnings -D clippy::nursery
 
   strict-rust:
