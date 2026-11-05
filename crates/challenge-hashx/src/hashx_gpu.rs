@@ -66,6 +66,10 @@ impl GpuSolver {
         clippy::too_many_lines,
         reason = "GPU resource and pipeline construction is one audited initialization transaction"
     )]
+    /// Initialize a compatible Vulkan device and optionally the native CUDA backend.
+    ///
+    /// # Errors
+    /// Returns errors for missing GPU capabilities, device setup or pipeline creation.
     pub async fn create() -> anyhow::Result<Self> {
         let instance =
             wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
@@ -213,10 +217,14 @@ impl GpuSolver {
         })
     }
 
+    /// Return the selected adapter name.
+    #[must_use]
     pub fn adapter(&self) -> &str {
         &self.adapter
     }
 
+    /// List available Vulkan and native GPU implementations.
+    #[must_use]
     pub fn implementations(&self) -> Vec<&'static str> {
         let mut implementations = Vec::with_capacity(3);
         if let Some(native) = self.native_backend.as_ref() {
@@ -229,6 +237,10 @@ impl GpuSolver {
         implementations
     }
 
+    /// Execute a GPU proof search with an optional explicitly selected backend.
+    ///
+    /// # Errors
+    /// Rejects invalid requests or unsupported implementations and propagates GPU failures.
     pub fn solve_with_implementation(
         &mut self,
         challenge: &Challenge,

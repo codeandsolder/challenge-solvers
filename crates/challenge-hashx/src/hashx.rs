@@ -15,6 +15,10 @@ pub struct Challenge {
 }
 
 impl Challenge {
+    /// Validate the protocol challenge and seed encoding.
+    ///
+    /// # Errors
+    /// Rejects invalid difficulty, seed encoding or seed length.
     pub fn validate(&self) -> anyhow::Result<()> {
         anyhow::ensure!(
             (1..=64).contains(&self.difficulty),
@@ -185,6 +189,8 @@ const fn prefix_mask(difficulty: u32) -> u32 {
 }
 
 #[cfg(feature = "gpu")]
+/// Split leading-zero difficulty into two GPU digest masks.
+#[must_use]
 pub fn difficulty_masks(difficulty: u32) -> (u32, u32) {
     let low = prefix_mask(difficulty.min(32));
     let high = if difficulty > 32 {
@@ -195,6 +201,10 @@ pub fn difficulty_masks(difficulty: u32) -> (u32, u32) {
     (low, high)
 }
 
+/// Generate the authoritative HashX program and compile it for native execution.
+///
+/// # Errors
+/// Propagates program generation or native compilation failures.
 pub fn build_compiled_seed(seed: &[u8]) -> anyhow::Result<(Vec<u8>, HashX, HashXProgram)> {
     let mut candidate = seed.to_vec();
     let mut counter = 0_u32;
@@ -216,6 +226,10 @@ pub fn build_compiled_seed(seed: &[u8]) -> anyhow::Result<(Vec<u8>, HashX, HashX
 }
 
 #[cfg(feature = "gpu")]
+/// Convert the generated HashX program to the GPU-neutral instruction representation.
+///
+/// # Errors
+/// Propagates invalid program construction or GPU instruction encoding.
 pub fn describe(seed: &[u8]) -> anyhow::Result<(HashX, GpuProgram)> {
     let (_usable_seed, compiled, generated) = build_compiled_seed(seed)?;
     let mut instructions = Vec::with_capacity(generated.instructions().len());
@@ -300,6 +314,10 @@ pub fn describe(seed: &[u8]) -> anyhow::Result<(HashX, GpuProgram)> {
     ))
 }
 
+/// Verify the complete proof against the same deterministic HashX program.
+///
+/// # Errors
+/// Rejects invalid challenges or nonces, or propagates program construction failures.
 pub fn verify(challenge: &Challenge, answer: &Answer) -> anyhow::Result<bool> {
     challenge.validate()?;
     let seed = hex::decode(&challenge.data).context("decode HashX challenge")?;
@@ -312,6 +330,8 @@ pub fn verify(challenge: &Challenge, answer: &Answer) -> anyhow::Result<bool> {
     Ok(hex::encode(hash) == answer.hash && valid_prefix(&hash, challenge.difficulty))
 }
 
+/// Return whether a digest satisfies the requested leading-zero difficulty.
+#[must_use]
 pub fn valid_prefix(hash: &[u8; 32], difficulty: u32) -> bool {
     if difficulty > 256 {
         return false;
