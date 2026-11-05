@@ -12,6 +12,7 @@ cryptographic search machinery extracted from
 - [challenge-protocols](crates/challenge-protocols) — reusable Anubis (classic and WASM),
   ALTCHA, Cap.js, Cerberus, go-away, haphash, mCaptcha and Linear.pub challenge
   parsing, solve/verify, backend selection and protocol response construction.
+- [challenge-hashx](crates/challenge-hashx) — standalone HashX challenge verification, native JIT and optional Vulkan/SM75 CUDA backends (without the HTTP service).
 - [anubis-argon2](crates/anubis-argon2) — specialized Anubis Argon2id
   computation and tests.
 - [vendor/argon2-fast](vendor/argon2-fast) — locally modified Argon2 reference

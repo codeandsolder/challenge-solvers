@@ -21,6 +21,7 @@ jobs:
         export CARGO_PROFILE_TEST_OPT_LEVEL=0 CARGO_PROFILE_TEST_DEBUG=0 CARGO_BUILD_JOBS=2
         cargo test --locked -p challenge-solvers --no-default-features --features std,anubis,altcha,capjs,cerberus,goaway,mcaptcha
         cargo test --locked -p challenge-protocols --no-default-features
+        cargo test --locked -p challenge-hashx --no-default-features
         cargo test --locked -p anubis-argon2
 
   full-backends:
@@ -33,6 +34,7 @@ jobs:
       command: |
         cargo test --locked -p challenge-solvers --all-features
         cargo test --locked -p challenge-protocols --all-features
+        cargo test --locked -p challenge-hashx --all-features
 
   wasm-simd:
     name: WASM SIMD128 cross-compile

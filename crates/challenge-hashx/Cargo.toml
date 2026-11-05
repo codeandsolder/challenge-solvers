@@ -1,0 +1,30 @@
+[package]
+name = "challenge-hashx"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.99"
+license = "MIT OR Apache-2.0"
+description = "Reusable Anubis HashX native-JIT, Vulkan and SM75 CUDA proof solvers"
+repository = "https://github.com/codeandsolder/challenge-solvers"
+publish = false
+
+[features]
+default = []
+gpu = ["dep:bytemuck", "dep:cudarc", "dep:tracing", "dep:wgpu"]
+
+[dependencies]
+anyhow = "1"
+challenge-protocols = { path = "../challenge-protocols", default-features = false }
+hashwx = { git = "https://github.com/codeandsolder/hashwx-rs", rev = "9c69f0f8a30d4528c46c39ce1972eea1cde8e177", default-features = false, features = ["native", "hashx"] }
+hex = "0.4"
+serde = { version = "1", features = ["derive"] }
+bytemuck = { version = "1", features = ["derive"], optional = true }
+cudarc = { version = "0.19.10", default-features = false, features = ["std", "driver", "nvrtc", "dynamic-loading", "cuda-13040"], optional = true }
+tracing = { version = "0.1", optional = true }
+wgpu = { version = "30.0.1", optional = true }
+
+[dev-dependencies]
+sha2 = "0.11"
+
+[lints]
+workspace = true

@@ -36,6 +36,7 @@ jobs:
         # lane tests optimized code. Keep this large link below runner limits.
         export CARGO_PROFILE_TEST_OPT_LEVEL=0 CARGO_PROFILE_TEST_DEBUG=0 CARGO_BUILD_JOBS=2
         cargo test --locked -p challenge-protocols
+        cargo test --locked -p challenge-hashx --no-default-features
         cargo test --locked -p anubis-argon2
 
   strict-rust:
