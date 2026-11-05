@@ -4,10 +4,9 @@ use anyhow::{Context, anyhow};
 use hashwx::HashX;
 
 use crate::{
-    hashx::{Challenge, GpuOp, Instr, describe, valid_prefix},
+    hashx::{Answer, Challenge, GpuOp, Instr, describe, valid_prefix},
     hashx_gpu_native::NativeGpuBackend,
 };
-use challenge_protocols::anubis::Answer;
 
 const AMD_WG_SIZE: u32 = 64;
 const NVIDIA_WG_SIZE: u32 = 32;

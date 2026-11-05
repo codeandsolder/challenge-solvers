@@ -8,8 +8,7 @@ use std::{
 
 use anyhow::Context;
 
-use crate::hashx::{Challenge, build_compiled_seed, valid_prefix};
-use challenge_protocols::anubis::{Answer, BackendResult};
+use crate::hashx::{Answer, BackendResult, Challenge, build_compiled_seed, valid_prefix};
 
 const SEARCH_LIMIT: u64 = u32::MAX as u64 + 1;
 const CANCEL_BATCH: u64 = 256;

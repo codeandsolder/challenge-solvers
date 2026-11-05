@@ -20,9 +20,11 @@ cryptographic search machinery extracted from
   upstream attribution are retained with the source.
 
 The workspace retains the original source history (imported as Git subtrees).
-See the individual packages for feature sets and backends. The service layer (HTTP endpoints, queues, routing, telemetry) remains in
-challenge-disasterer. The service is not yet wired to consume these extracted
-crates; the removal of its former in-tree solver sources is the next step.
+See individual packages for features and backends. The HTTP service,
+worker queues, routing, and telemetry remain in
+[challenge-disasterer](https://github.com/codeandsolder/challenge-disasterer).
+Its migration to these reusable Git dependencies is maintained in that
+repository; this workspace owns the algorithm implementations and protocol APIs.
 
 ## Use from another Rust project
 

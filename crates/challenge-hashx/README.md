@@ -27,6 +27,8 @@ fn solve(data_hex: String) -> anyhow::Result<String> {
 }
 ```
 
+HashX proof and search-result types are defined by this crate; no SHA/Argon2/Anubis protocol dependency is pulled in merely to serialize a HashX answer.
+
 The app manages queueing, CPU worker budgeting, GPU lifecycle and routing. This
 crate only handles actual HashX computation. The bundled SPIR-V shaders and
 SM75 cubin are source-controlled runtime assets, not newly generated build

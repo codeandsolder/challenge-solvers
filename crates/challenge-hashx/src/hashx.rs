@@ -4,9 +4,21 @@ use anyhow::anyhow;
 #[cfg(feature = "gpu")]
 use hashwx::HashXInstruction;
 use hashwx::{HashX, HashXError, HashXProgram};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
-use challenge_protocols::anubis::Answer;
+/// Exact nonce and digest returned by a successful `HashX` search.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+pub struct Answer {
+    pub nonce: String,
+    pub hash: String,
+}
+
+/// Native-JIT search result with elapsed execution time.
+#[derive(Debug, Clone)]
+pub struct BackendResult {
+    pub answer: Answer,
+    pub solve_ms: f64,
+}
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct Challenge {
