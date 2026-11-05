@@ -3,6 +3,11 @@ name = "challenge-solvers"
 version = "0.1.0"
 edition = "2024"
 license = "Apache-2.0"
+description = "High-performance portable-SIMD and GPU proof-of-work search kernels"
+repository = "https://github.com/codeandsolder/challenge-solvers"
+readme = "README.md"
+keywords = ["proof-of-work", "sha256", "simd", "hashing", "gpu"]
+categories = ["algorithms", "cryptography"]
 publish = false
 
 [lib]
