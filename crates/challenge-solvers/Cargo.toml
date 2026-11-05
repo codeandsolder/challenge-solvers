@@ -1,0 +1,56 @@
+[package]
+name = "challenge-solvers"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+publish = false
+
+[lib]
+crate-type = ["rlib"]
+
+[dependencies]
+cfg-if = "1.0"
+sha2 = { version = "0.11", default-features = false }
+pbkdf2 = { version = "0.13", features = ["hmac"] }
+blake3 = { version = "1.8", default-features = false }
+serde = { version = "1", features = ["derive"], optional = true }
+semver = { version = "1.0", default-features = false, optional = true, features = ["serde"] }
+wgpu = { version = "30.0.1", optional = true }
+bytemuck = { version = "1.24", features = ["derive"], optional = true }
+futures-channel = { version = "0.3", optional = true }
+rayon = { version = "1.10", optional = true }
+
+[target.'cfg(any(target_arch = "x86", target_arch = "x86_64"))'.dependencies]
+cpufeatures = { version = "0.3", default-features = false }
+
+[dev-dependencies]
+anyhow = "1"
+bincode = "1.3"
+serde_json = "1"
+serde = { version = "1", features = ["derive"] }
+
+[features]
+default = ["std", "runtime-dispatch", "portable-simd"]
+portable-simd = []
+runtime-dispatch = []
+alloc = []
+std = ["alloc"]
+compare-64bit = []
+internals = []
+
+# Protocol adapters are independently selectable. They share the same message,
+# hashing and solver engine underneath; portable SIMD is an independent backend feature.
+protocol = ["alloc", "dep:serde"]
+altcha = ["protocol"]
+anubis = ["protocol"]
+capjs = ["protocol"]
+cerberus = ["protocol", "dep:semver"]
+goaway = ["protocol"]
+mcaptcha = ["protocol"]
+all-challenges = ["altcha", "anubis", "capjs", "cerberus", "goaway", "mcaptcha"]
+rayon = ["std", "dep:rayon", "capjs"]
+
+gpu = ["std", "portable-simd", "compare-64bit", "dep:wgpu", "dep:bytemuck", "dep:futures-channel"]
+
+[lints]
+workspace = true
