@@ -110,6 +110,13 @@ struct Argon2Worker(anubis_argon2::Memory);
 struct Argon2Worker(argon2::Argon2<'static>);
 
 impl Argon2Worker {
+    #[cfg_attr(
+        feature = "portable-simd",
+        expect(
+            clippy::unnecessary_wraps,
+            reason = "shared worker constructor is fallible for the stable RustCrypto Argon2 backend"
+        )
+    )]
     fn new() -> anyhow::Result<Self> {
         #[cfg(feature = "portable-simd")]
         {
