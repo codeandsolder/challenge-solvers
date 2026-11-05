@@ -1,0 +1,20 @@
+name: Release portability
+
+on:
+  workflow_dispatch:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  stable-fallback:
+    name: Stable Rust 1.99 scalar validation
+    uses: codeandsolder/ci-workflows/.github/workflows/rust-sccache.yml@18397eb8f0bd8a76f90010a66a8519011f7992ca # main
+    with:
+      rust-toolchain: "1.99.0"
+      timeout-minutes: 25
+      command: |
+        cargo test --locked -p challenge-solvers --no-default-features --features std,anubis,altcha,capjs,cerberus,goaway,mcaptcha
+        cargo test --locked -p anubis-argon2

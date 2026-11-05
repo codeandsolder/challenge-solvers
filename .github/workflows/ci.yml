@@ -1,0 +1,35 @@
+name: Solver CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  simd-and-argon2:
+    name: SIMD engines and Anubis Argon2
+    uses: codeandsolder/ci-workflows/.github/workflows/rust-sccache.yml@18397eb8f0bd8a76f90010a66a8519011f7992ca # main
+    with:
+      rust-toolchain: "nightly-2026-11-03"
+      rust-components: "clippy rustfmt"
+      timeout-minutes: 25
+      command: |
+        cargo fmt --all -- --check
+        cargo test --locked -p challenge-solvers --all-features
+        cargo test --locked -p anubis-argon2
+        cargo clippy --locked --workspace --all-targets --all-features -- -D warnings -D clippy::nursery
+
+  strict-rust:
+    name: Strict Rust policy
+    uses: codeandsolder/rust-skills2/.github/workflows/strict-rust.yml@915a27e0cf59aa54885c605a9711cb1b3c6cfe03 # main
+    with:
+      cargo-args: "--locked --workspace --all-targets --all-features"
+      ban-python-outside-ci: true
