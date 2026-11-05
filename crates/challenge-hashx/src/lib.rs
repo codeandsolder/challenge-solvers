@@ -1,3 +1,4 @@
+#![recursion_limit = "256"]
 #![deny(unsafe_code)]
 
 //! Reusable `HashX` proof validation, native-JIT search and optional GPU backends.
