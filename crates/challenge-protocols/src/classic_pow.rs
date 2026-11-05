@@ -42,6 +42,11 @@ struct HaphashChallenge {
     difficulty: u8,
 }
 
+/// Solve one supported classic `PoW` protocol, returning protocol-native JSON.
+///
+/// # Errors
+/// Rejects unsupported protocol/backend combinations or malformed input;
+/// propagates nonce-search exhaustion and independent proof-check failures.
 pub fn solve(kind: &str, challenge: Value, implementation: Option<&str>) -> anyhow::Result<Result> {
     let implementation = Implementation::parse(implementation.unwrap_or("auto"))?;
     match kind {
@@ -166,6 +171,10 @@ fn decimal_solver(
     }
 }
 
+/// Construct an optimized binary SHA-256 CPU search backend.
+///
+/// # Errors
+/// Rejects unsupported ISA selectors, including SHA-NI for binary framing.
 pub fn binary_solver(
     implementation: Implementation,
     message: challenge_solvers::message::BinaryMessage,

@@ -523,7 +523,7 @@ mod tests {
     }
 
     #[test]
-    fn hashwx_payload_rejects_unrepresentable_work_parameters() -> anyhow::Result<()> {
+    fn hashwx_payload_rejects_unrepresentable_work_parameters() {
         let mut payload = CapV2HashWx {
             c: "00".repeat(32),
             d: 0,
@@ -535,6 +535,5 @@ mod tests {
         assert!(solve_cap_v2_hashwx(&payload).is_err());
         payload.n = 1_048_577;
         assert!(solve_cap_v2_hashwx(&payload).is_err());
-        Ok(())
     }
 }

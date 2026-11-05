@@ -15,6 +15,11 @@ pub struct Challenge {
     seed: String,
 }
 
+/// Solve the Linear.pub SHA-1 cookie challenge using `RustCrypto`.
+///
+/// # Errors
+/// Rejects invalid 40-hex-character seeds and unsupported backend choices;
+/// reports nonce-budget exhaustion or malformed digest offsets.
 pub fn solve(
     challenge: serde_json::Value,
     implementation: Implementation,

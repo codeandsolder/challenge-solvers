@@ -31,6 +31,11 @@ pub struct Challenge {
 }
 
 impl Challenge {
+    /// Validate the binary challenge framing and difficulty.
+    ///
+    /// # Errors
+    /// Rejects difficulty outside 1–64 bits, malformed hex challenge data,
+    /// or a decoded challenge outside the supported nonempty 4096-byte bound.
     pub fn validate(&self) -> anyhow::Result<()> {
         ensure!(
             (1..=MAX_DIFFICULTY).contains(&self.difficulty),
@@ -113,6 +118,8 @@ fn argon2id_hash(data: &[u8], nonce: u32) -> anyhow::Result<[u8; 32]> {
     argon2id_hash_with_memory(data, nonce, &mut memory)
 }
 
+/// Validate a WASM Anubis SHA-256 proof, including protocol nonce byte order.
+#[must_use]
 pub fn verify_sha256(challenge: &Challenge, answer: &Answer) -> bool {
     if challenge.validate().is_err() {
         return false;
@@ -127,6 +134,8 @@ pub fn verify_sha256(challenge: &Challenge, answer: &Answer) -> bool {
     hex::encode(hash) == answer.hash && has_leading_zero_bits(&hash, challenge.difficulty)
 }
 
+/// Validate a WASM Anubis Argon2id proof against the protocol digest.
+#[must_use]
 pub fn verify_argon2id(challenge: &Challenge, answer: &Answer) -> bool {
     if challenge.validate().is_err() {
         return false;
@@ -170,6 +179,11 @@ fn sha256_answer(
     Ok(answer)
 }
 
+/// Solve a binary Anubis SHA-256 challenge with a selected CPU backend.
+///
+/// # Errors
+/// Rejects invalid challenge framing or an unsupported backend, exhausted
+/// nonce space, or an answer failing independent verification.
 pub fn solve_sha256(challenge: &Challenge, implementation: Option<&str>) -> anyhow::Result<Result> {
     challenge.validate()?;
     let data = challenge.bytes()?;
@@ -194,6 +208,11 @@ pub fn solve_sha256(challenge: &Challenge, implementation: Option<&str>) -> anyh
 }
 
 #[cfg(feature = "gpu")]
+/// Solve a binary Anubis SHA-256 challenge with the GPU backend.
+///
+/// # Errors
+/// Rejects invalid challenges or layout, propagates GPU execution failures,
+/// or reports exhausted search space or invalid proof validation.
 pub async fn solve_sha256_gpu(
     gpu: &challenge_solvers::gpu::GpuContext,
     challenge: &Challenge,
@@ -220,6 +239,11 @@ pub async fn solve_sha256_gpu(
     })
 }
 
+/// Solve an Anubis Argon2id challenge using the specified worker count.
+///
+/// # Errors
+/// Rejects malformed challenges, invalid worker counts or backend options,
+/// and propagates Argon2 computation, worker coordination or search errors.
 pub fn solve_argon2id(
     challenge: &Challenge,
     implementation: Option<&str>,
