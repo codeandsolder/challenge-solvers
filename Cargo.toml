@@ -1,0 +1,20 @@
+[workspace]
+members = ["crates/challenge-solvers", "crates/anubis-argon2"]
+resolver = "3"
+exclude = ["vendor/argon2-fast"]
+
+[workspace.metadata.rust-skills2]
+allow-test-panics = true
+allow-test-panics-reason = "Inherited solver tests; production APIs remain strict"
+
+[workspace.lints.rust]
+unsafe_code = "deny"
+
+[workspace.lints.clippy]
+all = { level = "deny", priority = -1 }
+pedantic = { level = "deny", priority = -1 }
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+todo = "deny"
+unimplemented = "deny"
