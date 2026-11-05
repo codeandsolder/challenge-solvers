@@ -1,0 +1,14 @@
+[package]
+name = "anubis-argon2"
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+blake2 = { version = "0.11", default-features = false }
+
+[dev-dependencies]
+argon2 = { path = "../../vendor/argon2-fast" }
+
+[lints]
+workspace = true
