@@ -26,11 +26,11 @@ fn altcha_solver(
         Implementation::Safe => Ok(Box::new(
             challenge_solvers::solver::safe::AltchaSha256Solver::from(message),
         )),
-        #[cfg(target_arch = "x86_64")]
+        #[cfg(all(feature = "portable-simd", target_arch = "x86_64"))]
         Implementation::Avx2 => Ok(Box::new(
             challenge_solvers::solver::x86::Avx2AltchaSha256Solver::from(message),
         )),
-        #[cfg(target_arch = "x86_64")]
+        #[cfg(all(feature = "portable-simd", target_arch = "x86_64"))]
         Implementation::Avx512 => Ok(Box::new(
             challenge_solvers::solver::x86::Avx512AltchaSha256Solver::from(message),
         )),

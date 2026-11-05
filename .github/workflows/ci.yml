@@ -14,23 +14,33 @@ permissions:
   contents: read
 
 jobs:
-  simd-and-argon2:
-    name: SIMD engines and Anubis Argon2
-    uses: codeandsolder/ci-workflows/.github/workflows/rust-sccache.yml@18397eb8f0bd8a76f90010a66a8519011f7992ca # main
+  simd-kernels:
+    name: Portable-SIMD CPU kernel tests
+    uses: codeandsolder/ci-workflows/.github/workflows/rust-sccache.yml@c6fcb5f8920460c109ee87152506c3d97889ed4e # main
     with:
       rust-toolchain: "nightly-2026-11-03"
-      rust-components: "clippy rustfmt"
-      timeout-minutes: 25
+      rust-components: "rustfmt"
+      timeout-minutes: 15
       command: |
         cargo fmt --all -- --check
-        cargo test --locked -p challenge-solvers --all-features
+        cargo test --locked -p challenge-solvers --no-default-features --features std,runtime-dispatch,portable-simd,all-challenges,compare-64bit
+
+  protocol-solvers:
+    name: Reusable protocol and Argon2 tests
+    uses: codeandsolder/ci-workflows/.github/workflows/rust-sccache.yml@c6fcb5f8920460c109ee87152506c3d97889ed4e # main
+    with:
+      rust-toolchain: "nightly-2026-11-03"
+      timeout-minutes: 15
+      command: |
+        # Protocol acceptance is correctness-only; the separate SIMD kernel
+        # lane tests optimized code. Keep this large link below runner limits.
+        export CARGO_PROFILE_TEST_OPT_LEVEL=0 CARGO_PROFILE_TEST_DEBUG=0 CARGO_BUILD_JOBS=2
+        cargo test --locked -p challenge-protocols
         cargo test --locked -p anubis-argon2
-        cargo test --locked -p challenge-protocols --all-features
-        cargo clippy --locked --workspace --all-targets --all-features -- -D warnings -D clippy::nursery
 
   strict-rust:
     name: Strict Rust policy
-    uses: codeandsolder/rust-skills2/.github/workflows/strict-rust.yml@915a27e0cf59aa54885c605a9711cb1b3c6cfe03 # main
+    uses: codeandsolder/rust-skills2/.github/workflows/strict-rust.yml@5b17a2f45f7a9934655e1d6de35e391c306c40d9 # main
     with:
       cargo-args: "--locked --workspace --all-targets --all-features"
       ban-python-outside-ci: true

@@ -18,6 +18,11 @@ pub struct Challenge {
 }
 
 impl Challenge {
+    /// Validate the supported Anubis difficulty and challenge length.
+    ///
+    /// # Errors
+    /// Rejects a difficulty outside 1–16 leading-zero nibbles or a challenge
+    /// whose data exceeds the supported 4096-byte limit.
     pub fn validate(&self) -> anyhow::Result<()> {
         if !(1..=16).contains(&self.difficulty) {
             return Err(anyhow!("difficulty must be in 1..=16"));
@@ -29,11 +34,15 @@ impl Challenge {
     }
 
     #[cfg(feature = "gpu")]
+    /// Expected search attempts for this challenge, saturating on overflow.
+    #[must_use]
     pub fn expected_work(&self) -> u64 {
         16_u64.saturating_pow(u32::from(self.difficulty))
     }
 
     #[cfg(feature = "gpu")]
+    /// Whether the challenge length is aligned for the GPU backend.
+    #[must_use]
     pub const fn gpu_compatible(&self) -> bool {
         self.data.len().is_multiple_of(64)
     }
@@ -65,6 +74,8 @@ fn hash_hex(words: [u32; 8]) -> String {
     )
 }
 
+/// Check the Anubis SHA-256 proof against the challenge and difficulty.
+#[must_use]
 pub fn verify(challenge: &Challenge, answer: &Answer) -> bool {
     if challenge.validate().is_err() {
         return false;
@@ -79,6 +90,11 @@ pub fn verify(challenge: &Challenge, answer: &Answer) -> bool {
     hex == answer.hash && hex.starts_with(&"0".repeat(difficulty))
 }
 
+/// Search for a native Anubis SHA-256 proof using optimized CPU dispatch.
+///
+/// # Errors
+/// Returns an error for invalid challenges, unsupported message framing,
+/// an exhausted nonce budget, or a proof that fails final verification.
 pub fn solve_cpu(challenge: &Challenge, limit: u64) -> anyhow::Result<BackendResult> {
     challenge.validate()?;
     let message = DecimalMessage::new(challenge.data.as_bytes(), 0)
@@ -103,6 +119,11 @@ pub fn solve_cpu(challenge: &Challenge, limit: u64) -> anyhow::Result<BackendRes
     Ok(result)
 }
 
+/// Measure solver throughput using eight representative Anubis messages.
+///
+/// # Errors
+/// Returns an error if a message cannot be constructed or no valid
+/// calibration work or elapsed time can be recorded.
 pub fn calibrate_cpu(hash_limit: u64) -> anyhow::Result<f64> {
     let started = Instant::now();
     let mut attempted_total = 0_u64;

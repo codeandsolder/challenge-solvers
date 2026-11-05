@@ -18,6 +18,11 @@ use super::{
     DEFAULT_LIMIT, HaphashChallenge, McaptchaRequest, Result, encode_words_le, finish_goaway,
 };
 
+/// Solve a classic proof-of-work protocol using the shared GPU context.
+///
+/// # Errors
+/// Rejects unsupported protocols or malformed challenges, and propagates
+/// device execution, nonce-budget and proof-validation errors.
 pub async fn solve(
     gpu: &challenge_solvers::gpu::GpuContext,
     kind: &str,
