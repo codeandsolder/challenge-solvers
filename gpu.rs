@@ -16,10 +16,9 @@ use challenge_solvers::{
 use serde_json::{Value, json};
 
 use super::{
-    AltchaChallenge, AltchaCounterMode, CapV2Challenge, CapV2Envelope, DEFAULT_LIMIT,
-    HaphashChallenge, McaptchaRequest, Result, altcha_counter_mode, altcha_fast_case,
-    cap_v2_backend_name, cap_v2_prefix, elapsed_work_metadata, encode_words_be, encode_words_le,
-    finish_goaway, js_safe_integer_as_f64, solve_cap_v2_hashwx, solve_cap_v2_rsw,
+    CapV2Challenge, CapV2Envelope, DEFAULT_LIMIT, HaphashChallenge, McaptchaRequest, Result,
+    cap_v2_backend_name, cap_v2_prefix, elapsed_work_metadata, encode_words_le, finish_goaway,
+    js_safe_integer_as_f64, solve_cap_v2_hashwx, solve_cap_v2_rsw,
 };
 
 async fn solve_cap_decimal_gpu(
@@ -59,7 +58,7 @@ pub async fn solve(
         "capjs" => solve_capjs_gpu(gpu, challenge).await,
         "mcaptcha" => solve_mcaptcha_gpu(gpu, challenge).await,
         "haphash" => solve_haphash_gpu(gpu, challenge).await,
-        "altcha" => solve_altcha_gpu(gpu, challenge).await,
+        "altcha" => super::altcha::solve_gpu(gpu, challenge).await,
         _ => bail!("unsupported classic GPU solver: {kind}"),
     }
 }
@@ -360,38 +359,4 @@ async fn solve_mcaptcha_gpu(
         }
     }
     Err(anyhow!("mCaptcha GPU search exhausted configured limit"))
-}
-
-async fn solve_altcha_gpu(
-    gpu: &challenge_solvers::gpu::GpuContext,
-    challenge: Value,
-) -> anyhow::Result<Result> {
-    ensure!(
-        altcha_counter_mode(&challenge)? == AltchaCounterMode::Uint32,
-        "ALTCHA WGPU supports uint32 counter mode only"
-    );
-    let challenge: AltchaChallenge =
-        serde_json::from_value(challenge).context("invalid ALTCHA v2 challenge")?;
-    let (message, target, mask, key_length) = altcha_fast_case(&challenge)
-        .context("ALTCHA challenge shape is unsupported by the WGPU fast path")?;
-    let mut solver = challenge_solvers::gpu::AltchaSha256Solver::from(message);
-    solver.set_limit(u64::from(u32::MAX) + 1);
-    let started = Instant::now();
-    let solution = solver
-        .solve::<SOLVE_TYPE_MASK>(gpu, target, mask)
-        .await?
-        .context("ALTCHA GPU search exhausted configured limit")?;
-    let solve_ms = started.elapsed().as_secs_f64() * 1000.0;
-    let derived_key = encode_words_be(solution.hash);
-    let derived_key = &derived_key[..key_length * 2];
-    Ok(Result {
-        answer: json!({
-            "counter": solution.nonce,
-            "derivedKey": derived_key,
-            "time": solve_ms,
-            "attempted_nonces": solver.attempted_nonces(),
-        }),
-        solve_ms,
-        implementation: "wgpu".to_owned(),
-    })
 }
