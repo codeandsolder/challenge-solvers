@@ -11,10 +11,48 @@ permissions:
 jobs:
   stable-fallback:
     name: Stable Rust 1.99 scalar validation
-    uses: codeandsolder/ci-workflows/.github/workflows/rust-sccache.yml@18397eb8f0bd8a76f90010a66a8519011f7992ca # main
+    uses: codeandsolder/ci-workflows/.github/workflows/rust-sccache.yml@c6fcb5f8920460c109ee87152506c3d97889ed4e # main
     with:
       rust-toolchain: "1.99.0"
+      validation-tier: release
+      rustflags: ""
       timeout-minutes: 25
       command: |
         cargo test --locked -p challenge-solvers --no-default-features --features std,anubis,altcha,capjs,cerberus,goaway,mcaptcha
         cargo test --locked -p anubis-argon2
+
+  full-backends:
+    name: Full feature and accelerator regressions
+    uses: codeandsolder/ci-workflows/.github/workflows/rust-sccache.yml@c6fcb5f8920460c109ee87152506c3d97889ed4e # main
+    with:
+      rust-toolchain: "nightly-2026-11-03"
+      validation-tier: release
+      timeout-minutes: 45
+      command: |
+        cargo test --locked -p challenge-solvers --all-features
+        cargo test --locked -p challenge-protocols --all-features
+
+  wasm-simd:
+    name: WASM SIMD128 cross-compile
+    uses: codeandsolder/ci-workflows/.github/workflows/rust-sccache.yml@c6fcb5f8920460c109ee87152506c3d97889ed4e # main
+    with:
+      rust-toolchain: "nightly-2026-11-03"
+      validation-tier: release
+      rust-targets: "wasm32-wasip1"
+      rustflags: "-C target-feature=+simd128"
+      timeout-minutes: 30
+      command: |
+        cargo check --locked --target wasm32-wasip1 -p challenge-solvers --no-default-features --features std,portable-simd,compare-64bit
+
+  arm64:
+    name: AArch64 portable CPU compile
+    uses: codeandsolder/ci-workflows/.github/workflows/rust-sccache.yml@c6fcb5f8920460c109ee87152506c3d97889ed4e # main
+    with:
+      rust-toolchain: "nightly-2026-11-03"
+      validation-tier: release
+      rust-targets: "aarch64-unknown-linux-gnu"
+      rustflags: ""
+      timeout-minutes: 30
+      command: |
+        cargo check --locked --target aarch64-unknown-linux-gnu -p challenge-solvers --no-default-features --features std,portable-simd,compare-64bit
+        cargo check --locked --target aarch64-unknown-linux-gnu -p anubis-argon2

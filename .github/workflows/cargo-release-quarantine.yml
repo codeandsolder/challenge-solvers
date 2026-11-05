@@ -1,0 +1,19 @@
+name: Cargo dependency age gate
+
+on:
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  quarantine:
+    name: crates.io release-age quarantine (72h)
+    uses: codeandsolder/ci-workflows/.github/workflows/cargo-release-quarantine.yml@c6fcb5f8920460c109ee87152506c3d97889ed4e # main
+    with:
+      hours: 72
+      lockfile: Cargo.lock

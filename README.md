@@ -30,6 +30,22 @@ currently pins nightly Rust for `portable_simd`, with architecture-specific
 optimizations where measurements justify them. Scalar backends exist to test
 correctness, portability, and fallback, not to replace optimized algorithms.
 
+## CI and dependency maintenance
+
+Each pull request runs portable-SIMD CPU regression tests on the pinned nightly
+toolchain, plus the shared strict Rust/Python policy. Every Rust-compiling job
+uses [the shared mandatory sccache workflow](https://github.com/codeandsolder/ci-workflows);
+a separate gate checks the age of newly introduced Cargo.lock dependencies.
+
+More expensive all-feature/GPU backend, stable Rust 1.99 scalar, AArch64 and
+WASM SIMD128 checks run on release tags. The scalar lane is a portability
+check, **not** a replacement for the optimized SIMD implementation.
+
+[Renovate](renovate.json) tracks Cargo and immutable GitHub Actions references.
+Ordinary dependencies have a 72-hour age hold. Reviewed shared CI and strict
+policy changes are exempt from that hold using the central
+[trust-root preset](https://github.com/codeandsolder/ci-workflows/blob/main/renovate-ci-trust-root.json).
+
 ## Status
 
 Development migration: source packages are extracted and will be consumed as
