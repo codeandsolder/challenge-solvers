@@ -48,7 +48,7 @@ async fn solve_cap_decimal_gpu(
     bail!("Cap.js SHA-256 GPU search exhausted the lossless JavaScript-number domain")
 }
 
-pub async fn solve_gpu(
+pub async fn solve(
     gpu: &challenge_solvers::gpu::GpuContext,
     kind: &str,
     challenge: Value,
