@@ -6,46 +6,17 @@ use std::{
 use anyhow::{Context, anyhow, bail, ensure};
 use challenge_solvers::{
     build_mcaptcha_prefix,
-    capjs::ChallengeDescriptor as CapJsChallenge,
     cerberus::ChallengeDescriptor as CerberusChallenge,
     compute_mask_goaway, compute_mask_zero_nibbles, compute_target_mcaptcha, extract128_be,
     goaway::GoAwayConfig,
-    message::{CapJSEmitter, DecimalMessage, GoAwayMessage},
+    message::{DecimalMessage, GoAwayMessage},
     solver::{SOLVE_TYPE_GT, SOLVE_TYPE_LEADING_ZERO_BITS, SOLVE_TYPE_MASK},
 };
 use serde_json::{Value, json};
 
 use super::{
-    CapV2Challenge, CapV2Envelope, DEFAULT_LIMIT, HaphashChallenge, McaptchaRequest, Result,
-    cap_v2_backend_name, cap_v2_prefix, elapsed_work_metadata, encode_words_le, finish_goaway,
-    js_safe_integer_as_f64, solve_cap_v2_hashwx, solve_cap_v2_rsw,
+    DEFAULT_LIMIT, HaphashChallenge, McaptchaRequest, Result, encode_words_le, finish_goaway,
 };
-
-async fn solve_cap_decimal_gpu(
-    gpu: &challenge_solvers::gpu::GpuContext,
-    prefix: &[u8],
-    target: u64,
-    mask: u64,
-) -> anyhow::Result<(f64, u64)> {
-    let mut attempted = 0_u64;
-    for bank in 0..=u32::MAX {
-        let Some((message, fixup)) = DecimalMessage::new_f64(prefix, bank) else {
-            break;
-        };
-        let mut solver = challenge_solvers::gpu::DecimalSolver::from(message);
-        solver.set_limit(u64::MAX);
-        let result = solver.solve::<SOLVE_TYPE_MASK>(gpu, target, mask).await?;
-        attempted = attempted.saturating_add(solver.attempted_nonces());
-        if let Some(solution) = result {
-            let nonce = match fixup {
-                Some(value) => value.fixup(solution.nonce),
-                None => js_safe_integer_as_f64(solution.nonce)?,
-            };
-            return Ok((nonce, attempted));
-        }
-    }
-    bail!("Cap.js SHA-256 GPU search exhausted the lossless JavaScript-number domain")
-}
 
 pub async fn solve(
     gpu: &challenge_solvers::gpu::GpuContext,
@@ -55,7 +26,7 @@ pub async fn solve(
     match kind {
         "cerberus" => solve_cerberus_gpu(gpu, challenge).await,
         "goaway" => solve_goaway_gpu(gpu, challenge).await,
-        "capjs" => solve_capjs_gpu(gpu, challenge).await,
+        "capjs" => super::capjs::solve_gpu(gpu, challenge).await,
         "mcaptcha" => solve_mcaptcha_gpu(gpu, challenge).await,
         "haphash" => solve_haphash_gpu(gpu, challenge).await,
         "altcha" => super::altcha::solve_gpu(gpu, challenge).await,
@@ -152,117 +123,6 @@ async fn solve_goaway_gpu(
         attempted_nonces,
         started,
     ))
-}
-
-async fn solve_capjs_v2_gpu(
-    gpu: &challenge_solvers::gpu::GpuContext,
-    challenge: Value,
-) -> anyhow::Result<Result> {
-    let envelope: CapV2Envelope =
-        serde_json::from_value(challenge).context("invalid Cap.js format-2 challenge")?;
-    ensure!(envelope.format == 2, "invalid Cap.js format-2 marker");
-    ensure!(
-        !envelope.challenges.is_empty(),
-        "Cap.js format-2 challenge list is empty"
-    );
-
-    let started = Instant::now();
-    let mut attempted_nonces = 0_u64;
-    let mut solutions = Vec::with_capacity(envelope.challenges.len());
-    let mut used_sha256 = false;
-    let mut used_hashwx = false;
-    let mut used_rsw = false;
-
-    for challenge in &envelope.challenges {
-        let solution = match challenge {
-            CapV2Challenge::Sha256Pow { payload } => {
-                used_sha256 = true;
-                let (target, mask) = cap_v2_prefix(&payload.target)?;
-                let (nonce, attempted) =
-                    solve_cap_decimal_gpu(gpu, payload.salt.as_bytes(), target, mask).await?;
-                attempted_nonces = attempted_nonces.saturating_add(attempted);
-                json!({ "nonce": nonce })
-            }
-            CapV2Challenge::Rsw { payload } => {
-                used_rsw = true;
-                solve_cap_v2_rsw(payload)?
-            }
-            CapV2Challenge::HashWx { payload } => {
-                used_hashwx = true;
-                let (solution, attempted) = solve_cap_v2_hashwx(payload)?;
-                attempted_nonces = attempted_nonces.saturating_add(attempted);
-                solution
-            }
-            CapV2Challenge::Instrumentation { payload } => {
-                let _ = payload;
-                bail!(
-                    "Cap.js instrumentation is a browser-environment probe, not a proof-of-work mode"
-                )
-            }
-        };
-        solutions.push(solution);
-    }
-
-    let solve_ms = started.elapsed().as_secs_f64() * 1000.0;
-    Ok(Result {
-        answer: json!({
-            "token": envelope.token,
-            "solutions": solutions,
-            "attempted_nonces_total": attempted_nonces,
-        }),
-        solve_ms,
-        implementation: cap_v2_backend_name(used_sha256.then_some("wgpu"), used_hashwx, used_rsw),
-    })
-}
-
-async fn solve_capjs_gpu(
-    gpu: &challenge_solvers::gpu::GpuContext,
-    challenge: Value,
-) -> anyhow::Result<Result> {
-    if challenge.get("format").and_then(Value::as_u64) == Some(2) {
-        return solve_capjs_v2_gpu(gpu, challenge).await;
-    }
-    let descriptor: CapJsChallenge =
-        serde_json::from_value(challenge).context("invalid Cap.js challenge")?;
-    let rules = *descriptor.rules();
-    let token = descriptor.token.clone();
-    let emitter = CapJSEmitter::new(token.as_bytes());
-    let started = Instant::now();
-    let mut attempted_nonces = 0_u64;
-    let mut solutions = Vec::with_capacity(rules.count);
-    for index in 0..rules.count {
-        let mut salt = vec![0_u8; rules.salt_length];
-        let mut targets = [0_u32; 2];
-        let subchallenge = u32::try_from(index)
-            .context("Cap.js subchallenge index exceeds u32")?
-            .checked_add(1)
-            .context("Cap.js subchallenge index overflow")?;
-        emitter.emit(&mut salt, &mut targets, subchallenge);
-        let mask = rules
-            .mask()
-            .context("Cap.js difficulty exceeds the supported 64-bit target width")?;
-        let target = (u64::from(targets[0]) << 32) | u64::from(targets[1]);
-        let (nonce, attempted) = solve_cap_decimal_gpu(gpu, &salt, target, mask).await?;
-        attempted_nonces = attempted_nonces.saturating_add(attempted);
-        solutions.push(nonce);
-    }
-    let elapsed = started.elapsed();
-    let solve_ms = elapsed.as_secs_f64() * 1000.0;
-    let (elapsed_us, hashrate) = elapsed_work_metadata(elapsed, attempted_nonces);
-    Ok(Result {
-        answer: json!({
-            "token": token,
-            "solutions": solutions,
-            "_meta": {
-                "elapsed_us": elapsed_us,
-                "attempted_nonces": attempted_nonces,
-                "hashrate": hashrate,
-            },
-            "attempted_nonces_total": attempted_nonces,
-        }),
-        solve_ms,
-        implementation: "wgpu".to_owned(),
-    })
 }
 
 async fn solve_haphash_gpu(
