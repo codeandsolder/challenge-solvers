@@ -201,7 +201,7 @@ pub fn difficulty_masks(difficulty: u32) -> (u32, u32) {
     (low, high)
 }
 
-/// Generate the authoritative HashX program and compile it for native execution.
+/// Generate the authoritative `HashX` program and compile it for native execution.
 ///
 /// # Errors
 /// Propagates program generation or native compilation failures.
@@ -226,7 +226,7 @@ pub fn build_compiled_seed(seed: &[u8]) -> anyhow::Result<(Vec<u8>, HashX, HashX
 }
 
 #[cfg(feature = "gpu")]
-/// Convert the generated HashX program to the GPU-neutral instruction representation.
+/// Convert the generated `HashX` program to the GPU-neutral instruction representation.
 ///
 /// # Errors
 /// Propagates invalid program construction or GPU instruction encoding.
@@ -314,7 +314,7 @@ pub fn describe(seed: &[u8]) -> anyhow::Result<(HashX, GpuProgram)> {
     ))
 }
 
-/// Verify the complete proof against the same deterministic HashX program.
+/// Verify the complete proof against the same deterministic `HashX` program.
 ///
 /// # Errors
 /// Rejects invalid challenges or nonces, or propagates program construction failures.

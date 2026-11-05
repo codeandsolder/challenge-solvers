@@ -14,7 +14,7 @@ use challenge_protocols::anubis::{Answer, BackendResult};
 const SEARCH_LIMIT: u64 = u32::MAX as u64 + 1;
 const CANCEL_BATCH: u64 = 256;
 
-/// Solve a HashX challenge with native-JIT search over the u32 nonce range.
+/// Solve a `HashX` challenge with native-JIT search over the u32 nonce range.
 ///
 /// # Errors
 /// Rejects malformed challenges, invalid worker counts, exhausted searches or invalid proofs.
