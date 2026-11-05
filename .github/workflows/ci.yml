@@ -14,18 +14,26 @@ permissions:
   contents: read
 
 jobs:
-  simd-and-argon2:
-    name: SIMD engines and Anubis Argon2
+  simd-kernels:
+    name: Portable-SIMD CPU kernel tests
     uses: codeandsolder/ci-workflows/.github/workflows/rust-sccache.yml@c6fcb5f8920460c109ee87152506c3d97889ed4e # main
     with:
       rust-toolchain: "nightly-2026-11-03"
       rust-components: "rustfmt"
-      timeout-minutes: 25
+      timeout-minutes: 15
       command: |
         cargo fmt --all -- --check
         cargo test --locked -p challenge-solvers --no-default-features --features std,runtime-dispatch,portable-simd,all-challenges,compare-64bit
-        cargo test --locked -p anubis-argon2
+
+  protocol-solvers:
+    name: Reusable protocol and Argon2 tests
+    uses: codeandsolder/ci-workflows/.github/workflows/rust-sccache.yml@c6fcb5f8920460c109ee87152506c3d97889ed4e # main
+    with:
+      rust-toolchain: "nightly-2026-11-03"
+      timeout-minutes: 15
+      command: |
         cargo test --locked -p challenge-protocols --no-default-features
+        cargo test --locked -p anubis-argon2
 
   strict-rust:
     name: Strict Rust policy
