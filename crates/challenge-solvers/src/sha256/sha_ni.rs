@@ -100,8 +100,11 @@ pub trait Plucker: Sized {
 
 impl Plucker for () {}
 
-// ARX network using altered data layout
-#[inline]
+// This unrolled SHA-NI network is called in solver hot loops. Allowing ThinLTO
+// to outline it can reintroduce per-batch calls and prevent specialization of
+// the lane state, costing throughput in type-erased as well as typed clients.
+// Keep this shared helper inlined for all its monomorphized solver users.
+#[inline(always)]
 #[target_feature(enable = "sse4.1,sha")]
 #[expect(
     clippy::too_many_lines,
