@@ -106,7 +106,7 @@ impl Plucker for () {}
 // policies over the same algorithm, rather than copying the round network.
 #[inline(never)]
 #[target_feature(enable = "sse4.1,sha")]
-pub(crate) fn multiway_arx_abef_cdgh_outlined<
+pub fn multiway_arx_abef_cdgh_outlined<
     const BEGIN_ROUND_BY_4: usize,
     const LANES: usize,
     P: Plucker,
