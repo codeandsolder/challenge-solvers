@@ -100,8 +100,29 @@ pub trait Plucker: Sized {
 
 impl Plucker for () {}
 
-// ARX network using altered data layout
-#[inline]
+// Some solver families generate many distinct message-layout specializations.
+// Their round network benefits from an explicit shared code boundary, whereas
+// GoAway's single hot four-lane loop benefits from inlining it. Keep both
+// policies over the same algorithm, rather than copying the round network.
+#[inline(never)]
+#[target_feature(enable = "sse4.1,sha")]
+pub fn multiway_arx_abef_cdgh_outlined<
+    const BEGIN_ROUND_BY_4: usize,
+    const LANES: usize,
+    P: Plucker,
+>(
+    state: &mut [&mut [__m128i; 2]; LANES],
+    block_template: &[u32; 16],
+    plucker: P,
+) {
+    multiway_arx_abef_cdgh::<BEGIN_ROUND_BY_4, LANES, P>(state, block_template, plucker);
+}
+
+// This unrolled SHA-NI network is called in solver hot loops. Allowing ThinLTO
+// to outline it can reintroduce per-batch calls and prevent specialization of
+// the lane state, costing throughput in type-erased as well as typed clients.
+// Keep this shared helper inlined for all its monomorphized solver users.
+#[inline(always)]
 #[target_feature(enable = "sse4.1,sha")]
 #[expect(
     clippy::too_many_lines,
@@ -273,13 +294,25 @@ mod layout_tests {
     }
 }
 
-#[cfg(all(target_feature = "sse4.1", target_feature = "sha"))]
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
+    #[expect(
+        unsafe_code,
+        reason = "runtime feature detection proves the SHA-NI target requirements before entering the test helper"
+    )]
     fn test_multiway_arx() {
+        if !std::is_x86_feature_detected!("sse4.1") || !std::is_x86_feature_detected!("sha") {
+            return;
+        }
+        // SAFETY: both target features required by the helper were detected above.
+        unsafe { test_multiway_arx_on_supported_cpu() }
+    }
+
+    #[target_feature(enable = "sse4.1,sha")]
+    fn test_multiway_arx_on_supported_cpu() {
         let input_block = [
             0x6162_6380,
             0x0000_0000,
