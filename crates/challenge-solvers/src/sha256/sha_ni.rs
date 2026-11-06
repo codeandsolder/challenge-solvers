@@ -100,6 +100,24 @@ pub trait Plucker: Sized {
 
 impl Plucker for () {}
 
+// Some solver families generate many distinct message-layout specializations.
+// Their round network benefits from an explicit shared code boundary, whereas
+// GoAway's single hot four-lane loop benefits from inlining it. Keep both
+// policies over the same algorithm, rather than copying the round network.
+#[inline(never)]
+#[target_feature(enable = "sse4.1,sha")]
+pub(crate) fn multiway_arx_abef_cdgh_outlined<
+    const BEGIN_ROUND_BY_4: usize,
+    const LANES: usize,
+    P: Plucker,
+>(
+    state: &mut [&mut [__m128i; 2]; LANES],
+    block_template: &[u32; 16],
+    plucker: P,
+) {
+    multiway_arx_abef_cdgh::<BEGIN_ROUND_BY_4, LANES, P>(state, block_template, plucker);
+}
+
 // This unrolled SHA-NI network is called in solver hot loops. Allowing ThinLTO
 // to outline it can reintroduce per-batch calls and prevent specialization of
 // the lane state, costing throughput in type-erased as well as typed clients.

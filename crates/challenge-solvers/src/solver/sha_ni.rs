@@ -358,7 +358,11 @@ impl SingleBlockSolver {
                 let mut state2 = prepared_state;
                 let mut state3 = prepared_state;
 
-                crate::sha256::sha_ni::multiway_arx_abef_cdgh::<{ DIGIT_WORD_IDX0_DIV_4 }, 4, _>(
+                crate::sha256::sha_ni::multiway_arx_abef_cdgh_outlined::<
+                    { DIGIT_WORD_IDX0_DIV_4 },
+                    4,
+                    _,
+                >(
                     &mut [&mut state0, &mut state1, &mut state2, &mut state3],
                     &self.message.message,
                     SingleBlockLaneIdPlucker::<
