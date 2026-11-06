@@ -1130,7 +1130,7 @@ mod tests {
         );
         let (nonce, hash) = solver
             .solve::<{ crate::solver::SOLVE_TYPE_MASK }>(0, mask)
-            .ok_or_else(|| anyhow::anyhow!("reduced-radix SHA-NI path found no Anubis solution"));
+            .ok_or_else(|| anyhow::anyhow!("reduced-radix SHA-NI path found no Anubis solution"))?;
 
         let mut input = prefix.to_vec();
         write!(input, "{nonce}")?;

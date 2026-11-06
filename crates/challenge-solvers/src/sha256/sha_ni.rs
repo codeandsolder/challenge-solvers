@@ -294,13 +294,25 @@ mod layout_tests {
     }
 }
 
-#[cfg(all(target_feature = "sse4.1", target_feature = "sha"))]
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
+    #[expect(
+        unsafe_code,
+        reason = "runtime feature detection proves the SHA-NI target requirements before entering the test helper"
+    )]
     fn test_multiway_arx() {
+        if !std::is_x86_feature_detected!("sse4.1") || !std::is_x86_feature_detected!("sha") {
+            return;
+        }
+        // SAFETY: both target features required by the helper were detected above.
+        unsafe { test_multiway_arx_on_supported_cpu() }
+    }
+
+    #[target_feature(enable = "sse4.1,sha")]
+    fn test_multiway_arx_on_supported_cpu() {
         let input_block = [
             0x6162_6380,
             0x0000_0000,
