@@ -954,7 +954,7 @@ impl GpuContext {
             .and_then(|words| words.checked_mul(4))
             .ok_or_else(|| GpuError::new("ALTCHA GPU parameter buffer size overflow"))?;
         let limits = self.device.limits();
-        if param_bytes > u64::from(limits.max_storage_buffer_binding_size)
+        if param_bytes > limits.max_storage_buffer_binding_size
             || param_bytes > limits.max_buffer_size
         {
             return Err(GpuError::new(
