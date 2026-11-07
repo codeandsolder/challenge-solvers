@@ -187,8 +187,15 @@ enum AltchaGpuInput {
         nonce: Vec<u8>,
         cost: NonZeroU32,
     },
-    /// PBKDF2 currently uses its existing fixed-size optimized HMAC layout.
-    Pbkdf2(AltchaMessage),
+    /// Retain the specialized fixed-key/fixed-salt fast HMAC path.
+    Pbkdf2Fixed(AltchaMessage),
+    /// Arbitrary-length HMAC key and salt; full block padding and password
+    /// prehashing are handled by the general GPU backend.
+    Pbkdf2General {
+        salt: Vec<u8>,
+        nonce: Vec<u8>,
+        cost: NonZeroU32,
+    },
 }
 
 #[cfg(feature = "gpu")]
@@ -216,7 +223,8 @@ pub(super) fn auto_gpu_expected_work(challenge: &Value) -> Option<u128> {
     let candidates = 1_u128 << difficulty_bits;
     let (cost, pbkdf2) = match gpu_case.input {
         AltchaGpuInput::Sha256 { cost, .. } => (cost.get(), false),
-        AltchaGpuInput::Pbkdf2(message) => (message.cost.get(), true),
+        AltchaGpuInput::Pbkdf2Fixed(message) => (message.cost.get(), true),
+        AltchaGpuInput::Pbkdf2General { cost, .. } => (cost.get(), true),
     };
     let kdf_factor = if pbkdf2 { 2_u128 } else { 1 };
     Some(
@@ -241,9 +249,13 @@ fn altcha_gpu_case(challenge: &AltchaChallenge) -> anyhow::Result<AltchaGpuCase>
             cost,
         },
         "PBKDF2/SHA-256" => {
-            let (message, _) = altcha_fixed_message(challenge)
-                .context("ALTCHA PBKDF2 GPU requires 16-byte salt and nonce")?;
-            AltchaGpuInput::Pbkdf2(message)
+            let salt = hex::decode(&params.salt).context("invalid ALTCHA PBKDF2 salt hex")?;
+            let nonce = hex::decode(&params.nonce).context("invalid ALTCHA PBKDF2 nonce hex")?;
+            if let Some((message, _)) = altcha_fixed_message(challenge) {
+                AltchaGpuInput::Pbkdf2Fixed(message)
+            } else {
+                AltchaGpuInput::Pbkdf2General { salt, nonce, cost }
+            }
         }
         _ => bail!("ALTCHA GPU supports SHA-256 and PBKDF2/SHA-256 only"),
     };
@@ -701,8 +713,11 @@ pub(super) async fn solve_gpu(
         AltchaGpuInput::Sha256 { salt, nonce, cost } => {
             challenge_solvers::gpu::AltchaSha256Solver::for_sha256_prefix(&salt, &nonce, cost)?
         }
-        AltchaGpuInput::Pbkdf2(message) => {
+        AltchaGpuInput::Pbkdf2Fixed(message) => {
             challenge_solvers::gpu::AltchaSha256Solver::from(message)
+        }
+        AltchaGpuInput::Pbkdf2General { salt, nonce, cost } => {
+            challenge_solvers::gpu::AltchaSha256Solver::for_pbkdf2(&salt, &nonce, cost)?
         }
     };
     solver.set_prefix_nibbles(&gpu_case.prefix)?;
@@ -945,7 +960,11 @@ mod tests {
         request["parameters"]["salt"] = serde_json::json!("01".repeat(130));
         assert_eq!(auto_gpu_expected_work(&request), Some(32));
         request["parameters"]["algorithm"] = serde_json::json!("PBKDF2/SHA-256");
-        assert_eq!(auto_gpu_expected_work(&request), None);
+        assert_eq!(auto_gpu_expected_work(&request), Some(512));
+        request["parameters"]["nonce"] = serde_json::json!("ab".repeat(128));
+        assert_eq!(auto_gpu_expected_work(&request), Some(512));
+        request["parameters"]["salt"] = serde_json::json!("");
+        assert_eq!(auto_gpu_expected_work(&request), Some(512));
         request["parameters"]["algorithm"] = serde_json::json!("SHA-256");
         request["parameters"]["nonce"] = serde_json::json!("xx");
         assert_eq!(auto_gpu_expected_work(&request), None);

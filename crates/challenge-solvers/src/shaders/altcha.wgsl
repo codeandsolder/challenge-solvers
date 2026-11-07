@@ -83,6 +83,63 @@ fn sha256_suffix(candidate:u32,suffix:array<u32,16>,suffix_len:u32)->array<u32,8
  if(final_pos<56u){return intermediate;}
  return compress(intermediate,second);
 }
+// PBKDF2-HMAC-SHA256 with an arbitrary-length nonce||counter password and
+// arbitrary binary salt. Passwords >64 bytes become SHA256(password) as
+// required by HMAC, using the same nonce prefix-midstate and exact 64-bit
+// final length encoding as the general SHA path.
+//
+// P[64..] contains fully padded U1 inner message blocks for salt || INT(1).
+// They are candidate-independent, but each candidate must compress them
+// from its own ipad-derived chaining state.
+fn pbkdf2_general(candidate:u32,suffix:array<u32,16>,suffix_len:u32)->array<u32,8>{
+ var key:array<u32,16>;
+ for(var i=0u;i<16u;i=i+1u){key[i]=0u;}
+ let nonce_len=P[13];
+ if(P[14]==0u&&nonce_len<=64u-suffix_len){
+  // Raw nonce||counter is itself a valid HMAC key (<=64 bytes).
+  // All nonce bytes are present in P[48..63] for this branch.
+  for(var i=0u;i<nonce_len;i=i+1u){
+   let byte=(P[48u+i/4u]>>((3u-i%4u)*8u))&255u;
+   key[i/4u]=key[i/4u]|(byte<<((3u-i%4u)*8u));
+  }
+  for(var j=0u;j<suffix_len;j=j+1u){
+   var byte:u32;
+   if(P[11]!=0u){byte=suffix[suffix_len-1u-j];}
+   else{byte=(candidate>>((3u-j)*8u))&255u;}
+   let pos=nonce_len+j;
+   key[pos/4u]=key[pos/4u]|(byte<<((3u-pos%4u)*8u));
+  }
+ }else{
+  // HMAC requires a long candidate password to be SHA256 hashed first.
+  let hashed=sha256_suffix(candidate,suffix,suffix_len);
+  for(var i=0u;i<8u;i=i+1u){key[i]=hashed[i];}
+ }
+ var ib:array<u32,16>;
+ var ob:array<u32,16>;
+ for(var i=0u;i<16u;i=i+1u){
+  ib[i]=key[i]^0x36363636u;
+  ob[i]=key[i]^0x5c5c5c5cu;
+ }
+ let ipad=compress(IV,ib);
+ let opad=compress(IV,ob);
+ var inner=ipad;
+ for(var block=0u;block<P[25];block=block+1u){
+  var w:array<u32,16>;
+  for(var i=0u;i<16u;i=i+1u){w[i]=P[64u+block*16u+i];}
+  inner=compress(inner,w);
+ }
+ var outer:array<u32,16>;
+ for(var i=0u;i<16u;i=i+1u){outer[i]=0u;}
+ for(var i=0u;i<8u;i=i+1u){outer[i]=inner[i];}
+ outer[8]=0x80000000u;outer[15]=768u;
+ var u=compress(opad,outer);
+ var acc=u;
+ for(var iteration=1u;iteration<P[8];iteration=iteration+1u){
+  u=hmac(ipad,opad,u,8u,0u,32u);
+  for(var i=0u;i<8u;i=i+1u){acc[i]=acc[i]^u[i];}
+ }
+ return acc;
+}
 @compute @workgroup_size(__WORKGROUP_SIZE__)
 fn solve(@builtin(global_invocation_id) gid:vec3<u32>){
  let idx=gid.x;if(idx>=P[2]||atomicLoad(&R.flag)!=0u){return;}
@@ -127,6 +184,8 @@ fn solve(@builtin(global_invocation_id) gid:vec3<u32>){
   out=compress(IV,b);
   }
   for(var r=1u;r<P[8];r=r+1u){out=hash_prefix(out,32u);}
+ }else if(P[24]==2u){
+  out=pbkdf2_general(candidate,suffix,suffix_len);
  }else{
   var ib:array<u32,16>;var ob:array<u32,16>;for(var i=0u;i<16u;i=i+1u){ib[i]=0x36363636u;ob[i]=0x5c5c5c5cu;}
   for(var i=0u;i<4u;i=i+1u){ib[i]=ib[i]^P[20+i];ob[i]=ob[i]^P[20+i];}

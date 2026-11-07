@@ -943,12 +943,56 @@ impl GpuContext {
 
     async fn dispatch_altcha(
         &self,
-        params: &[u32; 64],
+        params: &[u32],
         workgroups: u32,
     ) -> Result<Option<(u64, [u32; 8])>, GpuError> {
+        if params.len() < 64 {
+            return Err(GpuError::new("incomplete ALTCHA GPU parameter buffer"));
+        }
+        let param_bytes = u64::try_from(params.len())
+            .ok()
+            .and_then(|words| words.checked_mul(4))
+            .ok_or_else(|| GpuError::new("ALTCHA GPU parameter buffer size overflow"))?;
+        let limits = self.device.limits();
+        if param_bytes > u64::from(limits.max_storage_buffer_binding_size)
+            || param_bytes > limits.max_buffer_size
+        {
+            return Err(GpuError::new(
+                "ALTCHA GPU parameter buffer exceeds device storage limits",
+            ));
+        }
+        // Existing layouts use the resident 256-byte buffer. Arbitrary
+        // PBKDF2 salts require their padded U1 blocks appended after it;
+        // bind an exact-size storage input rather than silently truncating.
+        let variable_buffer = (params.len() > 64).then(|| {
+            self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("challenge-solvers-altcha-variable-input"),
+                size: param_bytes,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            })
+        });
+        let input = variable_buffer.as_ref().unwrap_or(&self.generic_in_buf);
         self.queue.write_buffer(&self.out_buf, 0, &[0; 48]);
         self.queue
-            .write_buffer(&self.generic_in_buf, 0, bytemuck::cast_slice(params));
+            .write_buffer(input, 0, bytemuck::cast_slice(params));
+        let variable_binding = variable_buffer.as_ref().map(|buffer| {
+            self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("challenge-solvers-altcha-variable-bind-group"),
+                layout: &self.altcha_pipeline.get_bind_group_layout(0),
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: self.out_buf.as_entire_binding(),
+                    },
+                ],
+            })
+        });
+        let binding = variable_binding.as_ref().unwrap_or(&self.altcha_bind_group);
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -960,7 +1004,7 @@ impl GpuContext {
                 timestamp_writes: None,
             });
             pass.set_pipeline(&self.altcha_pipeline);
-            pass.set_bind_group(0, &self.altcha_bind_group, &[]);
+            pass.set_bind_group(0, binding, &[]);
             pass.dispatch_workgroups(workgroups, 1, 1);
         }
         encoder.copy_buffer_to_buffer(&self.out_buf, 0, &self.staging, 0, 48);
@@ -1606,6 +1650,56 @@ impl AltchaShaPrefix {
     }
 }
 
+/// Variable-length PBKDF2-HMAC-SHA256 message representation.
+///
+/// The nonce is the fixed part of the candidate-dependent HMAC key. For
+/// passwords longer than a SHA-256 block, its prefix state is reused by
+/// the GPU to hash the complete nonce+counter key before applying HMAC.
+///
+/// The salt's RFC 8018 block index and SHA-256 padding are prepared once.
+/// Unlike its HMAC chaining state, these message blocks are independent of
+/// the candidate password and may be shared by every GPU invocation.
+struct AltchaPbkdf2Input {
+    salt: Vec<u8>,
+    key_prefix: AltchaShaPrefix,
+    u1_blocks: Vec<u32>,
+}
+
+impl AltchaPbkdf2Input {
+    fn new(salt: &[u8], nonce: &[u8]) -> Result<Self, GpuError> {
+        let key_prefix = AltchaShaPrefix::new(nonce.to_vec())?;
+        let salt_len = salt
+            .len()
+            .checked_add(4)
+            .ok_or_else(|| GpuError::new("ALTCHA PBKDF2 salt length overflow"))?;
+        let padded_len = salt_len
+            .checked_add(9)
+            .ok_or_else(|| GpuError::new("ALTCHA PBKDF2 padding length overflow"))?
+            .div_ceil(64)
+            .checked_mul(64)
+            .ok_or_else(|| GpuError::new("ALTCHA PBKDF2 padded size overflow"))?;
+        let hmac_msg_len = u64::try_from(salt_len)
+            .map_err(|_| GpuError::new("ALTCHA PBKDF2 salt length exceeds u64"))?
+            .checked_add(64)
+            .ok_or_else(|| GpuError::new("ALTCHA PBKDF2 inner length overflow"))?;
+        let bit_len = hmac_msg_len
+            .checked_mul(8)
+            .ok_or_else(|| GpuError::new("ALTCHA PBKDF2 exceeds SHA-256 length limit"))?;
+        let mut padded = vec![0_u8; padded_len];
+        padded[..salt.len()].copy_from_slice(salt);
+        padded[salt.len() + 3] = 1; // PBKDF2 block index INT(1), BE32.
+        padded[salt_len] = 0x80;
+        padded[padded_len - 8..].copy_from_slice(&bit_len.to_be_bytes());
+        let (words, _) = padded.as_chunks::<4>();
+        let u1_blocks = words.iter().map(|word| u32::from_be_bytes(*word)).collect();
+        Ok(Self {
+            salt: salt.to_vec(),
+            key_prefix,
+            u1_blocks,
+        })
+    }
+}
+
 /// Async GPU counterpart of the CPU Altcha SHA-256/PBKDF2 solver.
 pub struct AltchaSha256Solver {
     message: crate::message::AltchaMessage,
@@ -1615,6 +1709,7 @@ pub struct AltchaSha256Solver {
     string_counter: bool,
     prefix_nibbles: Vec<u8>,
     sha_prefix: Option<AltchaShaPrefix>,
+    pbkdf2_input: Option<AltchaPbkdf2Input>,
 }
 
 impl From<crate::message::AltchaMessage> for AltchaSha256Solver {
@@ -1627,6 +1722,7 @@ impl From<crate::message::AltchaMessage> for AltchaSha256Solver {
             string_counter: false,
             prefix_nibbles: Vec::new(),
             sha_prefix: None,
+            pbkdf2_input: None,
         }
     }
 }
@@ -1664,6 +1760,33 @@ impl AltchaSha256Solver {
         };
         let mut solver = Self::from(message);
         solver.sha_prefix = Some(sha_prefix);
+        Ok(solver)
+    }
+
+    /// Construct a PBKDF2-HMAC-SHA256 search over arbitrary-length binary
+    /// salt and nonce. GPU candidates derive their own HMAC keys (including
+    /// SHA-256 hashing of passwords exceeding 64 bytes), process all U1 salt
+    /// blocks and run the remaining PBKDF2 iterations on-device.
+    ///
+    /// # Errors
+    ///
+    /// Rejects input lengths incompatible with SHA-256 bit-length encoding.
+    pub fn for_pbkdf2(
+        salt: &[u8],
+        nonce: &[u8],
+        cost: core::num::NonZeroU32,
+    ) -> Result<Self, GpuError> {
+        let input = AltchaPbkdf2Input::new(salt, nonce)?;
+        let message = crate::message::AltchaMessage {
+            nonce: [0; 16],
+            salt: [0; 16],
+            cost,
+            pbkdf2: true,
+            key_length: core::num::NonZeroU32::new(32)
+                .ok_or_else(|| GpuError::new("invalid PBKDF2 output length"))?,
+        };
+        let mut solver = Self::from(message);
+        solver.pbkdf2_input = Some(input);
         Ok(solver)
     }
 
@@ -1739,7 +1862,10 @@ impl AltchaSha256Solver {
                 .min(max_batch)
                 .min(u64::from(u32::MAX));
             let wgs = gpu_u32(batch.div_ceil(u64::from(WG_SIZE)).max(1), "workgroup count")?;
-            let mut p = [0_u32; 64];
+            let mut p = vec![0_u32; 64];
+            if let Some(input) = &self.pbkdf2_input {
+                p.extend_from_slice(&input.u1_blocks);
+            }
             p[0] = u32::from(self.message.pbkdf2);
             p[1] = low_u32(base);
             p[2] = gpu_u32(batch, "batch size")?;
@@ -1760,13 +1886,20 @@ impl AltchaSha256Solver {
             }
             p[16..20].copy_from_slice(&be_words_4(&self.message.salt));
             p[20..24].copy_from_slice(&be_words_4(&self.message.nonce));
-            if let Some(prefix) = &self.sha_prefix {
-                p[24] = 1;
+            if let Some(prefix) = self
+                .sha_prefix
+                .as_ref()
+                .or_else(|| self.pbkdf2_input.as_ref().map(|input| &input.key_prefix))
+            {
+                p[24] = if self.pbkdf2_input.is_some() { 2 } else { 1 };
                 p[13] = low_u32(prefix.fixed_len);
                 p[14] = high_u32(prefix.fixed_len);
                 p[15] = gpu_usize_u32(prefix.tail_len, "SHA-256 partial block length")?;
                 p[40..48].copy_from_slice(&prefix.state);
                 p[48..64].copy_from_slice(&be_words_16(&prefix.tail));
+            }
+            if let Some(input) = &self.pbkdf2_input {
+                p[25] = gpu_usize_u32(input.u1_blocks.len() / 16, "PBKDF2 salt block count")?;
             }
 
             if let Some((nonce, hash)) = gpu.dispatch_altcha(&p, wgs).await? {
@@ -2055,6 +2188,7 @@ fn verify_altcha<const TYPE: u8>(
     let string_counter = solver.string_counter;
     let prefix_nibbles = &solver.prefix_nibbles;
     let sha_prefix = solver.sha_prefix.as_ref();
+    let pbkdf2_input = solver.pbkdf2_input.as_ref();
     if (!string_counter && nonce > u64::from(u32::MAX))
         || (string_counter && nonce >= (1_u64 << 53))
     {
@@ -2066,13 +2200,20 @@ fn verify_altcha<const TYPE: u8>(
         nonce.to_be_bytes()[4..].to_vec()
     };
     let expected = if message.pbkdf2 {
-        let mut password = Vec::with_capacity(16 + suffix.len());
-        password.extend_from_slice(&message.nonce);
+        let mut password = Vec::with_capacity(
+            pbkdf2_input.map_or(16, |input| input.key_prefix.fixed_bytes.len()) + suffix.len(),
+        );
+        if let Some(input) = pbkdf2_input {
+            password.extend_from_slice(&input.key_prefix.fixed_bytes);
+        } else {
+            password.extend_from_slice(&message.nonce);
+        }
         password.extend_from_slice(&suffix);
+        let salt = pbkdf2_input.map_or(message.salt.as_slice(), |input| input.salt.as_slice());
         let mut output = [0_u8; 32];
         if pbkdf2::pbkdf2::<pbkdf2::hmac::Hmac<Sha256>>(
             &password,
-            &message.salt,
+            salt,
             message.cost.get(),
             &mut output,
         )
@@ -2585,6 +2726,36 @@ fn solve(@builtin(global_invocation_id) gid:vec3<u32>){{
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pbkdf2_u1_salt_blocks_have_correct_padding_and_bit_length() -> Result<(), GpuError> {
+        for length in [
+            0_usize, 1, 51, 52, 55, 56, 59, 60, 63, 64, 115, 116, 119, 120, 127, 128, 4097,
+        ] {
+            let salt: Vec<u8> = (0..length).map(|i| i as u8).collect();
+            let input = AltchaPbkdf2Input::new(&salt, &[0x15; 96])?;
+            let packed: Vec<u8> = input
+                .u1_blocks
+                .iter()
+                .flat_map(|word| word.to_be_bytes())
+                .collect();
+            assert_eq!(&packed[..length], salt);
+            assert_eq!(&packed[length..length + 4], &[0, 0, 0, 1]);
+            assert_eq!(packed[length + 4], 0x80);
+            assert!(packed[length + 5..packed.len() - 8].iter().all(|b| *b == 0));
+            let bit_len = u64::from_be_bytes(
+                packed[packed.len() - 8..]
+                    .try_into()
+                    .map_err(|_| GpuError::new("invalid SHA padding tail"))?,
+            );
+            assert_eq!(
+                bit_len,
+                (u64::try_from(length).map_err(|_| GpuError::new("invalid length"))? + 68) * 8
+            );
+            assert_eq!(packed.len() % 64, 0);
+        }
+        Ok(())
+    }
 
     #[test]
     fn counter_conversion_is_decimal_octal_digits() {
