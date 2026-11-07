@@ -35,8 +35,7 @@ serde_json = "1"
 serde = { version = "1", features = ["derive"] }
 
 [features]
-default = ["std", "runtime-dispatch", "portable-simd"]
-portable-simd = []
+default = ["std", "runtime-dispatch"]
 runtime-dispatch = []
 alloc = []
 std = ["alloc"]
@@ -44,7 +43,7 @@ compare-64bit = []
 internals = []
 
 # Protocol adapters are independently selectable. They share the same message,
-# hashing and solver engine underneath; portable SIMD is an independent backend feature.
+# hashing and solver engine underneath; portable SIMD is required.
 protocol = ["alloc", "dep:serde"]
 altcha = ["protocol"]
 anubis = ["protocol"]
@@ -55,7 +54,7 @@ mcaptcha = ["protocol"]
 all-challenges = ["altcha", "anubis", "capjs", "cerberus", "goaway", "mcaptcha"]
 rayon = ["std", "dep:rayon", "capjs"]
 
-gpu = ["std", "portable-simd", "compare-64bit", "dep:wgpu", "dep:bytemuck", "dep:futures-channel"]
+gpu = ["std", "compare-64bit", "dep:wgpu", "dep:bytemuck", "dep:futures-channel"]
 
 [lints]
 workspace = true
