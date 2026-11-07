@@ -1,0 +1,85 @@
+// ALTCHA SHA-256/PBKDF2 WGPU kernel; populated with unrolled SHA rounds and WG size.
+const IV:array<u32,8>=array<u32,8>(0x6a09e667u,0xbb67ae85u,0x3c6ef372u,0xa54ff53au,0x510e527fu,0x9b05688cu,0x1f83d9abu,0x5be0cd19u);
+struct OutBuf { flag:atomic<u32>,nonce_lo:u32,nonce_hi:u32,hash:array<u32,8> };
+@group(0) @binding(0) var<storage,read> P:array<u32>;
+@group(0) @binding(1) var<storage,read_write> R:OutBuf;
+fn rotr(x:u32,n:u32)->u32{return (x>>n)|(x<<(32u-n));}
+fn compress(s:array<u32,8>,block:array<u32,16>)->array<u32,8>{
+ var w0=block[0];var w1=block[1];var w2=block[2];var w3=block[3];var w4=block[4];var w5=block[5];var w6=block[6];var w7=block[7];
+ var w8=block[8];var w9=block[9];var w10=block[10];var w11=block[11];var w12=block[12];var w13=block[13];var w14=block[14];var w15=block[15];
+ var a=s[0];var b=s[1];var c=s[2];var d=s[3];var e=s[4];var f=s[5];var g=s[6];var h=s[7];
+ __SHA256_ROUNDS__
+ return array<u32,8>(s[0]+a,s[1]+b,s[2]+c,s[3]+d,s[4]+e,s[5]+f,s[6]+g,s[7]+h);
+}
+fn target_ok(h0:u32,h1:u32)->bool{
+ let ty=P[3];if(ty==1u){return h0<P[4]||(h0==P[4]&&h1<P[5]);}if(ty==2u){return h0>P[4]||(h0==P[4]&&h1>P[5]);}return (h0&P[6])==(P[4]&P[6])&&(h1&P[7])==(P[5]&P[7]);
+}
+fn hash_prefix(h:array<u32,8>,len:u32)->array<u32,8>{
+ var b:array<u32,16>;for(var i=0u;i<16u;i=i+1u){b[i]=0u;}
+ for(var j=0u;j<len;j=j+1u){let wi=j>>2u;let sh=(3u-(j&3u))*8u;let byte=(h[wi]>>sh)&0xffu;b[wi]=b[wi]|(byte<<sh);}
+ let wi=len>>2u;let sh=(3u-(len&3u))*8u;b[wi]=b[wi]|(0x80u<<sh);b[15]=len*8u;return compress(IV,b);
+}
+fn hmac(ipad:array<u32,8>,opad:array<u32,8>,msg:array<u32,8>,words:u32,tail_word:u32,bytes:u32)->array<u32,8>{
+ var b:array<u32,16>;for(var i=0u;i<16u;i=i+1u){b[i]=0u;}for(var i=0u;i<words;i=i+1u){b[i]=msg[i];}if(words<8u){b[words]=tail_word;}let padpos=bytes;let pwi=padpos>>2u;let psh=(3u-(padpos&3u))*8u;b[pwi]=b[pwi]|(0x80u<<psh);b[15]=(64u+bytes)*8u;let inner=compress(ipad,b);
+ var o:array<u32,16>;for(var i=0u;i<16u;i=i+1u){o[i]=0u;}for(var i=0u;i<8u;i=i+1u){o[i]=inner[i];}o[8]=0x80000000u;o[15]=768u;return compress(opad,o);
+}
+@compute @workgroup_size(__WORKGROUP_SIZE__)
+fn solve(@builtin(global_invocation_id) gid:vec3<u32>){
+ let idx=gid.x;if(idx>=P[2]||atomicLoad(&R.flag)!=0u){return;}
+ let candidate=P[1]+idx;
+ let carry=select(0u,1u,candidate<P[1]);
+ let candidate_hi=P[10]+carry;
+ var suffix:array<u32,16>;
+ var suffix_len=0u;
+ if(P[11]!=0u){
+  // Divide a JavaScript-safe 53-bit integer by ten without WGSL u64.
+  // The intermediate 10*65536 + 65535 remains representable in u32.
+  var hi=candidate_hi;var lo=candidate;
+  loop{
+   let qhi=hi/10u;
+   let top=(hi%10u)*65536u+(lo>>16u);
+   let middle=top/10u;
+   let bottom=(top%10u)*65536u+(lo&0xffffu);
+   suffix[suffix_len]=0x30u+bottom%10u;
+   suffix_len=suffix_len+1u;
+   hi=qhi;lo=(middle<<16u)|(bottom/10u);
+   if((hi|lo)==0u){break;}
+  }
+ }else{
+  suffix_len=4u;
+ }
+ var out:array<u32,8>;
+ if(P[0]==0u){
+  var b=array<u32,16>(P[16],P[17],P[18],P[19],P[20],P[21],P[22],P[23],0u,0u,0u,0u,0u,0u,0u,0u);
+  if(P[11]!=0u){
+   for(var j=0u;j<suffix_len;j=j+1u){
+    let pos=32u+j;let wi=pos>>2u;let sh=(3u-(pos&3u))*8u;
+    b[wi]=b[wi]|(suffix[suffix_len-1u-j]<<sh);
+   }
+   let pos=32u+suffix_len;let wi=pos>>2u;let sh=(3u-(pos&3u))*8u;
+   b[wi]=b[wi]|(0x80u<<sh);b[15]=pos*8u;
+  }else{
+   b[8]=candidate;b[9]=0x80000000u;b[15]=288u;
+  }
+  out=compress(IV,b);
+  for(var r=1u;r<P[8];r=r+1u){out=hash_prefix(out,P[9]);}
+ }else{
+  var ib:array<u32,16>;var ob:array<u32,16>;for(var i=0u;i<16u;i=i+1u){ib[i]=0x36363636u;ob[i]=0x5c5c5c5cu;}
+  for(var i=0u;i<4u;i=i+1u){ib[i]=ib[i]^P[20+i];ob[i]=ob[i]^P[20+i];}
+  if(P[11]!=0u){
+   for(var j=0u;j<suffix_len;j=j+1u){
+    let pos=16u+j;let wi=pos>>2u;let sh=(3u-(pos&3u))*8u;
+    let byte=suffix[suffix_len-1u-j]<<sh;
+    ib[wi]=ib[wi]^byte;ob[wi]=ob[wi]^byte;
+   }
+  }else{ib[4]=ib[4]^candidate;ob[4]=ob[4]^candidate;}
+  let ipad=compress(IV,ib);let opad=compress(IV,ob);
+  var sm:array<u32,8>;for(var i=0u;i<4u;i=i+1u){sm[i]=P[16+i];}for(var i=4u;i<8u;i=i+1u){sm[i]=0u;}
+  var u=hmac(ipad,opad,sm,4u,1u,20u);var acc=u;
+  for(var r=1u;r<P[8];r=r+1u){u=hmac(ipad,opad,u,8u,0u,32u);for(var i=0u;i<8u;i=i+1u){acc[i]=acc[i]^u[i];}}out=acc;
+ }
+ if(target_ok(out[0],out[1])&&atomicExchange(&R.flag,1u)==0u){
+  R.nonce_lo=candidate;R.nonce_hi=select(0u,candidate_hi,P[11]!=0u);
+  for(var i=0u;i<8u;i=i+1u){R.hash[i]=out[i];}
+ }
+}
