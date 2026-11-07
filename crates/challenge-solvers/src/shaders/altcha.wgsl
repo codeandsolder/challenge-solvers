@@ -11,8 +11,21 @@ fn compress(s:array<u32,8>,block:array<u32,16>)->array<u32,8>{
  __SHA256_ROUNDS__
  return array<u32,8>(s[0]+a,s[1]+b,s[2]+c,s[3]+d,s[4]+e,s[5]+f,s[6]+g,s[7]+h);
 }
-fn target_ok(h0:u32,h1:u32)->bool{
- let ty=P[3];if(ty==1u){return h0<P[4]||(h0==P[4]&&h1<P[5]);}if(ty==2u){return h0>P[4]||(h0==P[4]&&h1>P[5]);}return (h0&P[6])==(P[4]&P[6])&&(h1&P[7])==(P[5]&P[7]);
+fn target_ok(out:array<u32,8>)->bool{
+ let ty=P[3];
+ if(ty==4u&&P[12]!=0u){
+  // Compare each hex nibble, including odd lengths and all 32 digest bytes.
+  for(var i=0u;i<P[12];i=i+1u){
+   let actual=(out[i/8u]>>((7u-i%8u)*4u))&15u;
+   let expected=(P[32u+i/8u]>>((7u-i%8u)*4u))&15u;
+   if(actual!=expected){return false;}
+  }
+  return true;
+ }
+ let h0=out[0];let h1=out[1];
+ if(ty==1u){return h0<P[4]||(h0==P[4]&&h1<P[5]);}
+ if(ty==2u){return h0>P[4]||(h0==P[4]&&h1>P[5]);}
+ return (h0&P[6])==(P[4]&P[6])&&(h1&P[7])==(P[5]&P[7]);
 }
 fn hash_prefix(h:array<u32,8>,len:u32)->array<u32,8>{
  var b:array<u32,16>;for(var i=0u;i<16u;i=i+1u){b[i]=0u;}
@@ -62,7 +75,7 @@ fn solve(@builtin(global_invocation_id) gid:vec3<u32>){
    b[8]=candidate;b[9]=0x80000000u;b[15]=288u;
   }
   out=compress(IV,b);
-  for(var r=1u;r<P[8];r=r+1u){out=hash_prefix(out,P[9]);}
+  for(var r=1u;r<P[8];r=r+1u){out=hash_prefix(out,32u);}
  }else{
   var ib:array<u32,16>;var ob:array<u32,16>;for(var i=0u;i<16u;i=i+1u){ib[i]=0x36363636u;ob[i]=0x5c5c5c5cu;}
   for(var i=0u;i<4u;i=i+1u){ib[i]=ib[i]^P[20+i];ob[i]=ob[i]^P[20+i];}
@@ -78,7 +91,7 @@ fn solve(@builtin(global_invocation_id) gid:vec3<u32>){
   var u=hmac(ipad,opad,sm,4u,1u,20u);var acc=u;
   for(var r=1u;r<P[8];r=r+1u){u=hmac(ipad,opad,u,8u,0u,32u);for(var i=0u;i<8u;i=i+1u){acc[i]=acc[i]^u[i];}}out=acc;
  }
- if(target_ok(out[0],out[1])&&atomicExchange(&R.flag,1u)==0u){
+ if(target_ok(out)&&atomicExchange(&R.flag,1u)==0u){
   R.nonce_lo=candidate;R.nonce_hi=select(0u,candidate_hi,P[11]!=0u);
   for(var i=0u;i<8u;i=i+1u){R.hash[i]=out[i];}
  }
