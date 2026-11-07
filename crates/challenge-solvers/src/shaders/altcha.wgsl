@@ -36,6 +36,53 @@ fn hmac(ipad:array<u32,8>,opad:array<u32,8>,msg:array<u32,8>,words:u32,tail_word
  var b:array<u32,16>;for(var i=0u;i<16u;i=i+1u){b[i]=0u;}for(var i=0u;i<words;i=i+1u){b[i]=msg[i];}if(words<8u){b[words]=tail_word;}let padpos=bytes;let pwi=padpos>>2u;let psh=(3u-(padpos&3u))*8u;b[pwi]=b[pwi]|(0x80u<<psh);b[15]=(64u+bytes)*8u;let inner=compress(ipad,b);
  var o:array<u32,16>;for(var i=0u;i<16u;i=i+1u){o[i]=0u;}for(var i=0u;i<8u;i=i+1u){o[i]=inner[i];}o[8]=0x80000000u;o[15]=768u;return compress(opad,o);
 }
+// Finish SHA-256(salt || nonce || counter) with an arbitrary-length fixed
+// prefix. P[40..47] is the SHA chaining state after its full 64-byte blocks;
+// P[48..63] holds the remaining 0..63 prefix bytes. The binary or decimal
+// counter adds <=16 bytes, so SHA padding requires at most two more blocks.
+fn sha256_suffix(candidate:u32,suffix:array<u32,16>,suffix_len:u32)->array<u32,8>{
+ var first:array<u32,16>;
+ var second:array<u32,16>;
+ for(var i=0u;i<16u;i=i+1u){first[i]=0u;second[i]=0u;}
+ let remainder=P[15];
+ for(var i=0u;i<remainder;i=i+1u){
+  let byte=(P[48u+i/4u]>>((3u-i%4u)*8u))&255u;
+  first[i/4u]=first[i/4u]|(byte<<((3u-i%4u)*8u));
+ }
+ for(var j=0u;j<suffix_len;j=j+1u){
+  var byte:u32;
+  if(P[11]!=0u){
+   byte=suffix[suffix_len-1u-j];
+  }else{
+   byte=(candidate>>((3u-j)*8u))&255u;
+  }
+  let pos=remainder+j;
+  if(pos<64u){
+   first[pos/4u]=first[pos/4u]|(byte<<((3u-pos%4u)*8u));
+  }else{
+   let offset=pos-64u;
+   second[offset/4u]=second[offset/4u]|(byte<<((3u-offset%4u)*8u));
+  }
+ }
+ let final_pos=remainder+suffix_len;
+ if(final_pos<64u){
+  first[final_pos/4u]=first[final_pos/4u]|(0x80u<<((3u-final_pos%4u)*8u));
+ }else{
+  let offset=final_pos-64u;
+  second[offset/4u]=second[offset/4u]|(0x80u<<((3u-offset%4u)*8u));
+ }
+ // Total bit length, preserving high words across 32-bit overflow.
+ let byte_lo=P[13]+suffix_len;
+ let byte_hi=P[14]+select(0u,1u,byte_lo<P[13]);
+ let bit_lo=byte_lo<<3u;
+ let bit_hi=(byte_hi<<3u)|(byte_lo>>29u);
+ if(final_pos<56u){first[14]=bit_hi;first[15]=bit_lo;}
+ else{second[14]=bit_hi;second[15]=bit_lo;}
+ let state=array<u32,8>(P[40],P[41],P[42],P[43],P[44],P[45],P[46],P[47]);
+ let intermediate=compress(state,first);
+ if(final_pos<56u){return intermediate;}
+ return compress(intermediate,second);
+}
 @compute @workgroup_size(__WORKGROUP_SIZE__)
 fn solve(@builtin(global_invocation_id) gid:vec3<u32>){
  let idx=gid.x;if(idx>=P[2]||atomicLoad(&R.flag)!=0u){return;}
@@ -63,6 +110,9 @@ fn solve(@builtin(global_invocation_id) gid:vec3<u32>){
  }
  var out:array<u32,8>;
  if(P[0]==0u){
+  if(P[24]!=0u){
+   out=sha256_suffix(candidate,suffix,suffix_len);
+  }else{
   var b=array<u32,16>(P[16],P[17],P[18],P[19],P[20],P[21],P[22],P[23],0u,0u,0u,0u,0u,0u,0u,0u);
   if(P[11]!=0u){
    for(var j=0u;j<suffix_len;j=j+1u){
@@ -75,6 +125,7 @@ fn solve(@builtin(global_invocation_id) gid:vec3<u32>){
    b[8]=candidate;b[9]=0x80000000u;b[15]=288u;
   }
   out=compress(IV,b);
+  }
   for(var r=1u;r<P[8];r=r+1u){out=hash_prefix(out,32u);}
  }else{
   var ib:array<u32,16>;var ob:array<u32,16>;for(var i=0u;i<16u;i=i+1u){ib[i]=0x36363636u;ob[i]=0x5c5c5c5cu;}

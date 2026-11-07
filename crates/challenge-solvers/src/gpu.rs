@@ -1558,6 +1558,55 @@ impl CerberusSolver {
     }
 }
 
+/// Reusable midstate and at-most-one partial compression block for
+/// SHA-256(salt || nonce || variable-counter). Entire fixed prefixes are
+/// compressed once on CPU; each GPU candidate completes at most two blocks.
+struct AltchaShaPrefix {
+    fixed_bytes: Vec<u8>,
+    state: [u32; 8],
+    tail: [u8; 64],
+    tail_len: usize,
+    fixed_len: u64,
+}
+
+impl AltchaShaPrefix {
+    fn new(fixed_bytes: Vec<u8>) -> Result<Self, GpuError> {
+        let fixed_len = u64::try_from(fixed_bytes.len())
+            .map_err(|_| GpuError::new("ALTCHA SHA-256 prefix length does not fit in u64"))?;
+        // SHA-256's 64-bit bit length must also accommodate a maximum
+        // 16-digit decimal counter, without overflow.
+        if fixed_len > (u64::MAX / 8) - 16 {
+            return Err(GpuError::new(
+                "ALTCHA SHA-256 message exceeds 64-bit bit length",
+            ));
+        }
+        let mut state = crate::sha256::IV;
+        let mut chunks = fixed_bytes.chunks_exact(64);
+        for chunk in &mut chunks {
+            let words: [u32; 16] = core::array::from_fn(|i| {
+                u32::from_be_bytes([
+                    chunk[i * 4],
+                    chunk[i * 4 + 1],
+                    chunk[i * 4 + 2],
+                    chunk[i * 4 + 3],
+                ])
+            });
+            crate::sha256::digest_block(&mut state, &words);
+        }
+        let remainder = chunks.remainder();
+        let tail_len = remainder.len();
+        let mut tail = [0_u8; 64];
+        tail[..tail_len].copy_from_slice(remainder);
+        Ok(Self {
+            fixed_bytes,
+            state,
+            tail,
+            tail_len,
+            fixed_len,
+        })
+    }
+}
+
 /// Async GPU counterpart of the CPU Altcha SHA-256/PBKDF2 solver.
 pub struct AltchaSha256Solver {
     message: crate::message::AltchaMessage,
@@ -1566,6 +1615,7 @@ pub struct AltchaSha256Solver {
     limit: u64,
     string_counter: bool,
     prefix_nibbles: Vec<u8>,
+    sha_prefix: Option<AltchaShaPrefix>,
 }
 
 impl From<crate::message::AltchaMessage> for AltchaSha256Solver {
@@ -1577,11 +1627,47 @@ impl From<crate::message::AltchaMessage> for AltchaSha256Solver {
             limit: u64::MAX,
             string_counter: false,
             prefix_nibbles: Vec::new(),
+            sha_prefix: None,
         }
     }
 }
 
 impl AltchaSha256Solver {
+    /// Construct a SHA-256 ALTCHA solver for arbitrary-length binary
+    /// salt/nonce data. Pre-hash complete blocks on CPU once; the GPU
+    /// performs only the counter-dependent SHA-256 compression.
+    ///
+    /// # Errors
+    ///
+    /// Rejects message lengths beyond SHA-256's 64-bit length field.
+    pub fn for_sha256_prefix(
+        salt: &[u8],
+        nonce: &[u8],
+        cost: core::num::NonZeroU32,
+    ) -> Result<Self, GpuError> {
+        let length = salt
+            .len()
+            .checked_add(nonce.len())
+            .ok_or_else(|| GpuError::new("ALTCHA SHA-256 salt and nonce length overflow"))?;
+        let mut fixed = Vec::with_capacity(length);
+        fixed.extend_from_slice(salt);
+        fixed.extend_from_slice(nonce);
+        let sha_prefix = AltchaShaPrefix::new(fixed)?;
+        // The fixed CPU message struct is retained for existing PBKDF2
+        // layouts. The SHA path below uses the general prefix exclusively.
+        let message = crate::message::AltchaMessage {
+            nonce: [0; 16],
+            salt: [0; 16],
+            cost,
+            pbkdf2: false,
+            key_length: core::num::NonZeroU32::new(32)
+                .ok_or_else(|| GpuError::new("invalid SHA-256 output length"))?,
+        };
+        let mut solver = Self::from(message);
+        solver.sha_prefix = Some(sha_prefix);
+        Ok(solver)
+    }
+
     /// Require an exact hexadecimal prefix of the SHA-256 output, including
     /// half-byte prefixes and all 64 nibbles. Empty means any digest matches.
     ///
@@ -1675,6 +1761,14 @@ impl AltchaSha256Solver {
             }
             p[16..20].copy_from_slice(&be_words_4(&self.message.salt));
             p[20..24].copy_from_slice(&be_words_4(&self.message.nonce));
+            if let Some(prefix) = &self.sha_prefix {
+                p[24] = 1;
+                p[13] = low_u32(prefix.fixed_len);
+                p[14] = high_u32(prefix.fixed_len);
+                p[15] = gpu_usize_u32(prefix.tail_len, "SHA-256 partial block length")?;
+                p[40..48].copy_from_slice(&prefix.state);
+                p[48..64].copy_from_slice(&be_words_16(&prefix.tail));
+            }
 
             if let Some((nonce, hash)) = gpu.dispatch_altcha(&p, wgs).await? {
                 self.attempted_nonces = base + batch - self.start_nonce;
@@ -1686,6 +1780,7 @@ impl AltchaSha256Solver {
                     mask,
                     self.string_counter,
                     &self.prefix_nibbles,
+                    self.sha_prefix.as_ref(),
                 ) {
                     return Err(GpuError::new("GPU returned an invalid Altcha proof"));
                 }
@@ -1967,6 +2062,7 @@ fn verify_altcha<const TYPE: u8>(
     mask: u64,
     string_counter: bool,
     prefix_nibbles: &[u8],
+    sha_prefix: Option<&AltchaShaPrefix>,
 ) -> bool {
     if (!string_counter && nonce > u64::from(u32::MAX))
         || (string_counter && nonce >= (1_u64 << 53))
@@ -1995,9 +2091,15 @@ fn verify_altcha<const TYPE: u8>(
         }
         be_words_8(&output)
     } else {
-        let mut first = Vec::with_capacity(32 + suffix.len());
-        first.extend_from_slice(&message.salt);
-        first.extend_from_slice(&message.nonce);
+        let mut first = Vec::with_capacity(
+            sha_prefix.map_or(32, |prefix| prefix.fixed_bytes.len()) + suffix.len(),
+        );
+        if let Some(prefix) = sha_prefix {
+            first.extend_from_slice(&prefix.fixed_bytes);
+        } else {
+            first.extend_from_slice(&message.salt);
+            first.extend_from_slice(&message.nonce);
+        }
         first.extend_from_slice(&suffix);
         let mut digest: [u8; 32] = Sha256::digest(&first).into();
         // ALTCHA v2 truncates only the final digest, after all iterations.
