@@ -578,7 +578,7 @@ mod tests {
     fn altcha_reference_backend_is_not_exposed_by_production() -> anyhow::Result<()> {
         for implementation in ["reference", "altcha-rust"] {
             let error = require_error(
-                solve("altcha", json!({"parameters": {}}), Some(implementation)),
+                solve("altcha", json!({"parameters": {}}), Some(implementation), 1),
                 "external ALTCHA reference solver must not be selectable in production",
             )?;
             assert!(
