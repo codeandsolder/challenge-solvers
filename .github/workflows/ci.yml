@@ -36,6 +36,10 @@ jobs:
         # lane tests optimized code. Keep this large link below runner limits.
         export CARGO_PROFILE_TEST_OPT_LEVEL=0 CARGO_PROFILE_TEST_DEBUG=0 CARGO_BUILD_JOBS=2
         cargo test --locked -p challenge-protocols
+        # The WGPU protocol parser/routing tests need the GPU feature but
+        # not an actual GPU. Keep this on ordinary Linux CI.
+        cargo test --locked -p challenge-protocols --features gpu altcha_gpu_
+        cargo test --locked -p challenge-solvers --features gpu pbkdf2_u1_salt_blocks_have_correct_padding_and_bit_length
         cargo test --locked -p challenge-hashx --no-default-features
         cargo test --locked -p anubis-argon2
 
