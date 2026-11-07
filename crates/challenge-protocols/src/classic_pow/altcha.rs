@@ -179,6 +179,27 @@ fn altcha_fast_case(challenge: &AltchaChallenge) -> Option<(AltchaMessage, u64, 
     Some((message, target, mask, key_length))
 }
 
+/// A GPU routing cost estimate, expressed in SHA-256 compression-equivalent
+/// units. It is a *dispatch heuristic*, not a claim about the winning nonce:
+/// official ALTCHA challenges can contain precomputed exact prefixes.
+#[cfg(feature = "gpu")]
+pub(super) fn auto_gpu_expected_work(challenge: &Value) -> Option<u128> {
+    let counter_mode = altcha_counter_mode(challenge).ok()?;
+    let parsed: AltchaChallenge = serde_json::from_value(challenge.clone()).ok()?;
+    let (message, nibbles, ..) = altcha_gpu_case(&parsed).ok()?;
+    let counter_bits: usize = match counter_mode {
+        AltchaCounterMode::Uint32 => 32,
+        AltchaCounterMode::String => 53,
+    };
+    let difficulty_bits = nibbles.len().saturating_mul(4).min(counter_bits);
+    let candidates = 1_u128 << difficulty_bits;
+    // One SHA digest per iteration, or at least two compression operations
+    // per PBKDF2 HMAC. Saturating work avoids overflowing on long prefixes.
+    let cost = u128::from(message.cost.get());
+    let kdf_factor = if message.pbkdf2 { 2_u128 } else { 1 };
+    Some(candidates.saturating_mul(cost).saturating_mul(kdf_factor))
+}
+
 #[cfg(feature = "gpu")]
 fn altcha_gpu_case(
     challenge: &AltchaChallenge,
@@ -770,6 +791,36 @@ mod tests {
     }
 
     #[test]
+    fn altcha_cpu_auto_fast_short_prefix_respects_worker_stack() -> anyhow::Result<()> {
+        // Debug builds on AVX2 hosts previously overflowed Tokio's worker
+        // stack when the dispatcher inlined all specialized SIMD variants.
+        for (algorithm, cost) in [("SHA-256", 2), ("PBKDF2/SHA-256", 16)] {
+            let mut challenge = AltchaChallenge {
+                parameters: AltchaChallengeParameters {
+                    algorithm: algorithm.to_owned(),
+                    cost,
+                    key_length: 32,
+                    key_prefix: String::new(),
+                    memory_cost: None,
+                    nonce: "2a".repeat(16),
+                    parallelism: None,
+                    salt: "51".repeat(16),
+                },
+            };
+            let salt = hex::decode(&challenge.parameters.salt)?;
+            let mut password = hex::decode(&challenge.parameters.nonce)?;
+            password.extend_from_slice(&0_u32.to_be_bytes());
+            let expected = altcha_derive_key(&challenge.parameters, &salt, &password)?;
+            challenge.parameters.key_prefix = hex::encode(&expected[..1]);
+            let solved = try_solve_altcha_fast(&challenge, Implementation::Auto)?
+                .context("expected optimized ALTCHA search")?;
+            assert_eq!(solved.answer["counter"], 0);
+            assert_eq!(solved.answer["derivedKey"], hex::encode(expected));
+        }
+        Ok(())
+    }
+
+    #[test]
     fn altcha_optimized_sha_truncates_only_the_final_digest() -> anyhow::Result<()> {
         for algorithm in ["SHA-256", "PBKDF2/SHA-256"] {
             let mut challenge = AltchaChallenge {
@@ -795,6 +846,47 @@ mod tests {
             assert_eq!(optimized.answer["counter"], 0);
             assert_eq!(optimized.answer["derivedKey"], hex::encode(&expected));
         }
+        Ok(())
+    }
+
+    #[cfg(feature = "gpu")]
+    #[test]
+    fn altcha_gpu_cost_hint_uses_validated_shape_and_counter_domain() -> anyhow::Result<()> {
+        let mut request = serde_json::json!({
+            "counterMode": "uint32",
+            "parameters": {
+                "algorithm": "SHA-256", "cost": 2, "keyLength": 12,
+                "keyPrefix": "0", "nonce": "01".repeat(16),
+                "salt": "02".repeat(16)
+            }
+        });
+        assert_eq!(auto_gpu_expected_work(&request), Some(32));
+        request["parameters"]["keyPrefix"] = serde_json::json!("00");
+        assert_eq!(auto_gpu_expected_work(&request), Some(512));
+        request["parameters"]["keyPrefix"] = serde_json::json!("000");
+        assert_eq!(auto_gpu_expected_work(&request), Some(8_192));
+        request["parameters"]["algorithm"] = serde_json::json!("PBKDF2/SHA-256");
+        request["parameters"]["cost"] = serde_json::json!(16);
+        request["parameters"]["keyPrefix"] = serde_json::json!("00");
+        assert_eq!(auto_gpu_expected_work(&request), Some(8_192));
+        request["parameters"]["keyPrefix"] = serde_json::json!("a".repeat(24));
+        assert_eq!(
+            auto_gpu_expected_work(&request),
+            Some((1_u128 << 32) * 16 * 2)
+        );
+        request["counterMode"] = serde_json::json!("string");
+        assert_eq!(
+            auto_gpu_expected_work(&request),
+            Some((1_u128 << 53) * 16 * 2)
+        );
+        request["parameters"]["algorithm"] = serde_json::json!("SCRYPT");
+        assert_eq!(auto_gpu_expected_work(&request), None);
+        request["parameters"]["algorithm"] = serde_json::json!("SHA-256");
+        request["parameters"]["keyPrefix"] = serde_json::json!("bad!");
+        assert_eq!(auto_gpu_expected_work(&request), None);
+        request["parameters"]["keyPrefix"] = serde_json::json!("a");
+        request["parameters"]["nonce"] = serde_json::json!("00");
+        assert_eq!(auto_gpu_expected_work(&request), None);
         Ok(())
     }
 

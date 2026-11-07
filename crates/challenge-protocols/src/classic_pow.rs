@@ -70,6 +70,20 @@ pub fn solve(
     }
 }
 
+/// Estimated candidate-cost score for automatic WGPU routing, only for
+/// protocol shapes the existing GPU implementation can actually execute.
+///
+/// This shares the protocol's real parser and GPU eligibility logic so the
+/// service does not maintain a duplicate, incomplete list of supported cases.
+#[cfg(feature = "gpu")]
+#[must_use]
+pub fn auto_gpu_expected_work(kind: &str, challenge: &Value) -> Option<u128> {
+    match kind {
+        "altcha" => altcha::auto_gpu_expected_work(challenge),
+        _ => None,
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 pub enum Implementation {
     Auto,
