@@ -1565,6 +1565,7 @@ pub struct AltchaSha256Solver {
     start_nonce: u64,
     limit: u64,
     string_counter: bool,
+    prefix_nibbles: Vec<u8>,
 }
 
 impl From<crate::message::AltchaMessage> for AltchaSha256Solver {
@@ -1575,11 +1576,31 @@ impl From<crate::message::AltchaMessage> for AltchaSha256Solver {
             start_nonce: 0,
             limit: u64::MAX,
             string_counter: false,
+            prefix_nibbles: Vec::new(),
         }
     }
 }
 
 impl AltchaSha256Solver {
+    /// Require an exact hexadecimal prefix of the SHA-256 output, including
+    /// half-byte prefixes and all 64 nibbles. Empty means any digest matches.
+    ///
+    /// The input is nibble values (0..=15), rather than ASCII hex digits.
+    ///
+    /// # Errors
+    ///
+    /// Rejects prefixes longer than SHA-256 or malformed nibble values.
+    pub fn set_prefix_nibbles(&mut self, nibbles: &[u8]) -> Result<(), GpuError> {
+        if nibbles.len() > 64 || nibbles.iter().any(|&nibble| nibble > 15) {
+            return Err(GpuError::new(
+                "ALTCHA GPU prefix must contain <=64 valid hex nibbles",
+            ));
+        }
+        self.prefix_nibbles.clear();
+        self.prefix_nibbles.extend_from_slice(nibbles);
+        Ok(())
+    }
+
     /// Use ALTCHA v2 decimal-string counter encoding rather than binary u32.
     ///
     /// Covers the complete JavaScript-safe integer counter domain (0..=2^53-1).
@@ -1646,6 +1667,12 @@ impl AltchaSha256Solver {
             p[7] = low_u32(mask);
             p[8] = self.message.cost.get();
             p[9] = self.message.key_length.get().min(32);
+            p[12] = gpu_usize_u32(self.prefix_nibbles.len(), "ALTCHA prefix length")?;
+            // Eight hex nibbles per u32. Unlike the legacy first-64-bit
+            // target/mask comparison, this carries the entire SHA-256 prefix.
+            for (index, nibble) in self.prefix_nibbles.iter().enumerate() {
+                p[32 + index / 8] |= u32::from(*nibble) << ((7 - index % 8) * 4);
+            }
             p[16..20].copy_from_slice(&be_words_4(&self.message.salt));
             p[20..24].copy_from_slice(&be_words_4(&self.message.nonce));
 
@@ -1658,6 +1685,7 @@ impl AltchaSha256Solver {
                     target,
                     mask,
                     self.string_counter,
+                    &self.prefix_nibbles,
                 ) {
                     return Err(GpuError::new("GPU returned an invalid Altcha proof"));
                 }
@@ -1938,6 +1966,7 @@ fn verify_altcha<const TYPE: u8>(
     target: u64,
     mask: u64,
     string_counter: bool,
+    prefix_nibbles: &[u8],
 ) -> bool {
     if (!string_counter && nonce > u64::from(u32::MAX))
         || (string_counter && nonce >= (1_u64 << 53))
@@ -1971,13 +2000,22 @@ fn verify_altcha<const TYPE: u8>(
         first.extend_from_slice(&message.nonce);
         first.extend_from_slice(&suffix);
         let mut digest: [u8; 32] = Sha256::digest(&first).into();
-        let key_len = usize::try_from(message.key_length.get().min(32)).unwrap_or(32);
+        // ALTCHA v2 truncates only the final digest, after all iterations.
         for _ in 1..message.cost.get() {
-            digest = Sha256::digest(&digest[..key_len]).into();
+            digest = Sha256::digest(digest).into();
         }
         be_words_8(&digest)
     };
-    expected == hash && result_matches_full64::<TYPE>(hash, target, mask)
+    let prefix_matches = prefix_nibbles.iter().enumerate().all(|(index, expected)| {
+        let digit = (hash[index / 8] >> ((7 - index % 8) * 4)) & 0x0f;
+        digit == u32::from(*expected)
+    });
+    let condition = if TYPE == crate::solver::SOLVE_TYPE_MASK && !prefix_nibbles.is_empty() {
+        true // Full digest prefix supersedes the 64-bit target/mask.
+    } else {
+        result_matches_full64::<TYPE>(hash, target, mask)
+    };
+    expected == hash && prefix_matches && condition
 }
 
 fn altcha_shader_source() -> String {

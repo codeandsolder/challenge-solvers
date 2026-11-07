@@ -140,15 +140,12 @@ fn try_solve_altcha_fast(
     }))
 }
 
-fn altcha_fast_case(challenge: &AltchaChallenge) -> Option<(AltchaMessage, u64, u64, usize)> {
+fn altcha_fixed_message(challenge: &AltchaChallenge) -> Option<(AltchaMessage, usize)> {
     let parameters = &challenge.parameters;
     if !matches!(parameters.algorithm.as_str(), "SHA-256" | "PBKDF2/SHA-256")
         || parameters.cost == 0
         || parameters.key_length == 0
         || parameters.key_length > 32
-        || parameters.key_prefix.is_empty()
-        || !parameters.key_prefix.len().is_multiple_of(2)
-        || parameters.key_prefix.len() > 8
     {
         return None;
     }
@@ -158,18 +155,52 @@ fn altcha_fast_case(challenge: &AltchaChallenge) -> Option<(AltchaMessage, u64, 
     let salt: [u8; 16] = hex::decode(&parameters.salt)
         .ok()
         .and_then(|bytes| bytes.try_into().ok())?;
-    let cost = NonZeroU32::new(parameters.cost)?;
-    let key_length_u32 = u32::try_from(parameters.key_length).ok()?;
-    let key_length = NonZeroU32::new(key_length_u32)?;
-    let (target, mask) = prefix_target(&parameters.key_prefix).ok()?;
+    let pbkdf2 = parameters.algorithm == "PBKDF2/SHA-256";
     let message = AltchaMessage {
         nonce,
         salt,
-        cost,
-        pbkdf2: parameters.algorithm == "PBKDF2/SHA-256",
-        key_length,
+        cost: NonZeroU32::new(parameters.cost)?,
+        pbkdf2,
+        // The optimized nested SHA kernel takes its *intermediate* digest
+        // length from this field. ALTCHA v2 truncates only the final result,
+        // so all SHA-256 iterations must consume the complete 32-byte digest.
+        key_length: NonZeroU32::new(if pbkdf2 {
+            u32::try_from(parameters.key_length).ok()?
+        } else {
+            32
+        })?,
     };
-    Some((message, target, mask, parameters.key_length))
+    Some((message, parameters.key_length))
+}
+
+fn altcha_fast_case(challenge: &AltchaChallenge) -> Option<(AltchaMessage, u64, u64, usize)> {
+    let (message, key_length) = altcha_fixed_message(challenge)?;
+    let (target, mask) = prefix_target(&challenge.parameters.key_prefix).ok()?;
+    Some((message, target, mask, key_length))
+}
+
+#[cfg(feature = "gpu")]
+fn altcha_gpu_case(
+    challenge: &AltchaChallenge,
+) -> anyhow::Result<(AltchaMessage, Vec<u8>, u64, u64, usize)> {
+    let (message, key_length) = altcha_fixed_message(challenge)
+        .context("ALTCHA GPU requires a SHA-256/PBKDF2-SHA256 challenge with 16-byte nonce and salt, and key length 1..=32")?;
+    let prefix = AltchaHexPrefix::parse(&challenge.parameters.key_prefix)?;
+    ensure!(
+        prefix.0.len() <= key_length * 2,
+        "ALTCHA GPU prefix exceeds the derived key length"
+    );
+    let mut target = 0_u64;
+    for (index, nibble) in prefix.0.iter().take(16).enumerate() {
+        target |= u64::from(*nibble) << (60 - index * 4);
+    }
+    let significant_bits = prefix.0.len().min(16) * 4;
+    let mask = if significant_bits == 0 {
+        0
+    } else {
+        u64::MAX << (64 - significant_bits)
+    };
+    Ok((message, prefix.0, target, mask, key_length))
 }
 struct AltchaHexPrefix(Vec<u8>);
 
@@ -596,9 +627,9 @@ pub(super) async fn solve_gpu(
     let counter_mode = altcha_counter_mode(&challenge)?;
     let challenge: AltchaChallenge =
         serde_json::from_value(challenge).context("invalid ALTCHA v2 challenge")?;
-    let (message, target, mask, key_length) = altcha_fast_case(&challenge)
-        .context("ALTCHA challenge shape is unsupported by the WGPU fast path")?;
+    let (message, prefix, target, mask, key_length) = altcha_gpu_case(&challenge)?;
     let mut solver = challenge_solvers::gpu::AltchaSha256Solver::from(message);
+    solver.set_prefix_nibbles(&prefix)?;
     if counter_mode == AltchaCounterMode::String {
         solver.set_string_counter();
         solver.set_limit(JS_MAX_SAFE_INTEGER + 1);
@@ -735,6 +766,73 @@ mod tests {
             assert!(parallel.answer["attempted_nonces"].as_u64().unwrap_or(0) >= target + 1);
             assert_eq!(serial.answer["attempted_nonces"], target + 1);
         }
+        Ok(())
+    }
+
+    #[test]
+    fn altcha_optimized_sha_truncates_only_the_final_digest() -> anyhow::Result<()> {
+        for algorithm in ["SHA-256", "PBKDF2/SHA-256"] {
+            let mut challenge = AltchaChallenge {
+                parameters: AltchaChallengeParameters {
+                    algorithm: algorithm.to_owned(),
+                    cost: 3,
+                    key_length: 12,
+                    key_prefix: String::new(),
+                    memory_cost: None,
+                    nonce: "55".repeat(16),
+                    parallelism: None,
+                    salt: "cc".repeat(16),
+                },
+            };
+            let salt = hex::decode(&challenge.parameters.salt)?;
+            let mut password = hex::decode(&challenge.parameters.nonce)?;
+            password.extend_from_slice(&0_u32.to_be_bytes());
+            let expected = altcha_derive_key(&challenge.parameters, &salt, &password)?;
+            assert_eq!(expected.len(), 12);
+            challenge.parameters.key_prefix = hex::encode(&expected[..2]);
+            let optimized = try_solve_altcha_fast(&challenge, Implementation::Safe)?
+                .context("expected optimized SHA256/PBKDF2 path")?;
+            assert_eq!(optimized.answer["counter"], 0);
+            assert_eq!(optimized.answer["derivedKey"], hex::encode(&expected));
+        }
+        Ok(())
+    }
+
+    #[cfg(feature = "gpu")]
+    #[test]
+    fn altcha_gpu_accepts_odd_and_full_digest_hex_prefixes() -> anyhow::Result<()> {
+        let mut challenge = AltchaChallenge {
+            parameters: AltchaChallengeParameters {
+                algorithm: "SHA-256".to_owned(),
+                cost: 2,
+                key_length: 32,
+                key_prefix: String::new(),
+                memory_cost: None,
+                nonce: "01".repeat(16),
+                parallelism: None,
+                salt: "02".repeat(16),
+            },
+        };
+        for prefix in [
+            String::new(),
+            "0".to_owned(),
+            "AbC".to_owned(),
+            "12ab34".to_owned(),
+            "aBcDeF".repeat(10),
+        ] {
+            challenge.parameters.key_prefix = prefix.clone();
+            let (_message, nibbles, target, mask, key_length) = altcha_gpu_case(&challenge)?;
+            assert_eq!(nibbles.len(), prefix.len());
+            assert_eq!(key_length, 32);
+            if prefix == "AbC" {
+                assert_eq!(target, 0xabc0_0000_0000_0000);
+                assert_eq!(mask, 0xfff0_0000_0000_0000);
+            }
+        }
+        challenge.parameters.key_prefix = "a".repeat(65);
+        assert!(altcha_gpu_case(&challenge).is_err());
+        challenge.parameters.key_prefix = "hello".to_owned();
+        assert!(altcha_gpu_case(&challenge).is_err());
         Ok(())
     }
 
