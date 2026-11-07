@@ -1806,7 +1806,8 @@ impl AltchaSha256Solver {
     /// Rejects zero length, non-PBKDF2 inputs, and lengths beyond RFC 8018.
     pub fn set_pbkdf2_key_length(&mut self, length: usize) -> Result<(), GpuError> {
         let max_len = u64::from(u32::MAX) * 32;
-        if !self.message.pbkdf2 || length == 0 || u64::try_from(length).is_err_or(|n| n > max_len) {
+        if !self.message.pbkdf2 || length == 0 || !u64::try_from(length).is_ok_and(|n| n <= max_len)
+        {
             return Err(GpuError::new("invalid PBKDF2-SHA256 derived key length"));
         }
         self.output_key_length = length;
