@@ -1562,7 +1562,9 @@ impl CerberusSolver {
 pub struct AltchaSha256Solver {
     message: crate::message::AltchaMessage,
     attempted_nonces: u64,
+    start_nonce: u64,
     limit: u64,
+    string_counter: bool,
 }
 
 impl From<crate::message::AltchaMessage> for AltchaSha256Solver {
@@ -1570,13 +1572,28 @@ impl From<crate::message::AltchaMessage> for AltchaSha256Solver {
         Self {
             message,
             attempted_nonces: 0,
+            start_nonce: 0,
             limit: u64::MAX,
+            string_counter: false,
         }
     }
 }
 
 impl AltchaSha256Solver {
-    /// Set the maximum number of candidates dispatched.
+    /// Use ALTCHA v2 decimal-string counter encoding rather than binary u32.
+    ///
+    /// Covers the complete JavaScript-safe integer counter domain (0..=2^53-1).
+    pub const fn set_string_counter(&mut self) {
+        self.string_counter = true;
+    }
+
+    /// Set the inclusive search starting counter, allowing disjoint GPU
+    /// partitions and exact tests across the u32 rollover.
+    pub const fn set_start_nonce(&mut self, start: u64) {
+        self.start_nonce = start;
+    }
+
+    /// Set the exclusive upper counter bound (up to the encoding's domain).
     pub const fn set_limit(&mut self, limit: u64) {
         self.limit = limit;
     }
@@ -1598,13 +1615,18 @@ impl AltchaSha256Solver {
         target: u64,
         mask: u64,
     ) -> Result<Option<GpuSolution>, GpuError> {
-        let limit = self.limit.min(u64::from(u32::MAX) + 1);
+        let counter_limit = if self.string_counter {
+            1_u64 << 53
+        } else {
+            u64::from(u32::MAX) + 1
+        };
+        let limit = self.limit.min(counter_limit);
         let desired = gpu_batch_target(
             expected_work_full64::<TYPE>(target, mask),
             u64::from(WG_SIZE),
         );
         let max_batch = u64::from(gpu.max_wgs) * u64::from(WG_SIZE);
-        let mut base = 0_u64;
+        let mut base = self.start_nonce;
         while base < limit {
             let batch = desired
                 .min(limit - base)
@@ -1615,6 +1637,8 @@ impl AltchaSha256Solver {
             p[0] = u32::from(self.message.pbkdf2);
             p[1] = low_u32(base);
             p[2] = gpu_u32(batch, "batch size")?;
+            p[10] = high_u32(base);
+            p[11] = u32::from(self.string_counter);
             p[3] = u32::from(TYPE);
             p[4] = high_u32(target);
             p[5] = low_u32(target);
@@ -1627,7 +1651,14 @@ impl AltchaSha256Solver {
 
             if let Some((nonce, hash)) = gpu.dispatch_altcha(&p, wgs).await? {
                 self.attempted_nonces = base + batch;
-                if !verify_altcha::<TYPE>(&self.message, nonce, hash, target, mask) {
+                if !verify_altcha::<TYPE>(
+                    &self.message,
+                    nonce,
+                    hash,
+                    target,
+                    mask,
+                    self.string_counter,
+                ) {
                     return Err(GpuError::new("GPU returned an invalid Altcha proof"));
                 }
                 return Ok(Some(GpuSolution {
@@ -1906,14 +1937,22 @@ fn verify_altcha<const TYPE: u8>(
     hash: [u32; 8],
     target: u64,
     mask: u64,
+    string_counter: bool,
 ) -> bool {
-    let Ok(counter) = u32::try_from(nonce) else {
+    if (!string_counter && nonce > u64::from(u32::MAX))
+        || (string_counter && nonce >= (1_u64 << 53))
+    {
         return false;
+    }
+    let suffix = if string_counter {
+        nonce.to_string().into_bytes()
+    } else {
+        nonce.to_be_bytes()[4..].to_vec()
     };
     let expected = if message.pbkdf2 {
-        let mut password = [0_u8; 20];
-        password[..16].copy_from_slice(&message.nonce);
-        password[16..].copy_from_slice(&counter.to_be_bytes());
+        let mut password = Vec::with_capacity(16 + suffix.len());
+        password.extend_from_slice(&message.nonce);
+        password.extend_from_slice(&suffix);
         let mut output = [0_u8; 32];
         if pbkdf2::pbkdf2::<pbkdf2::hmac::Hmac<Sha256>>(
             &password,
@@ -1927,11 +1966,11 @@ fn verify_altcha<const TYPE: u8>(
         }
         be_words_8(&output)
     } else {
-        let mut first = [0_u8; 36];
-        first[..16].copy_from_slice(&message.salt);
-        first[16..32].copy_from_slice(&message.nonce);
-        first[32..].copy_from_slice(&counter.to_be_bytes());
-        let mut digest: [u8; 32] = Sha256::digest(first).into();
+        let mut first = Vec::with_capacity(32 + suffix.len());
+        first.extend_from_slice(&message.salt);
+        first.extend_from_slice(&message.nonce);
+        first.extend_from_slice(&suffix);
+        let mut digest: [u8; 32] = Sha256::digest(&first).into();
         let key_len = usize::try_from(message.key_length.get().min(32)).unwrap_or(32);
         for _ in 1..message.cost.get() {
             digest = Sha256::digest(&digest[..key_len]).into();
@@ -1995,17 +2034,63 @@ fn hmac(ipad:array<u32,8>,opad:array<u32,8>,msg:array<u32,8>,words:u32,tail_word
 }}
 @compute @workgroup_size({WG_SIZE})
 fn solve(@builtin(global_invocation_id) gid:vec3<u32>){{
- let idx=gid.x;if(idx>=P[2]||atomicLoad(&R.flag)!=0u){{return;}}let candidate=P[1]+idx;var out:array<u32,8>;
+ let idx=gid.x;if(idx>=P[2]||atomicLoad(&R.flag)!=0u){{return;}}
+ let candidate=P[1]+idx;
+ let carry=select(0u,1u,candidate<P[1]);
+ let candidate_hi=P[10]+carry;
+ var suffix:array<u32,16>;
+ var suffix_len=0u;
+ if(P[11]!=0u){{
+  // Divide a JavaScript-safe 53-bit integer by ten without WGSL u64.
+  // The intermediate 10*65536 + 65535 remains representable in u32.
+  var hi=candidate_hi;var lo=candidate;
+  loop{{
+   let qhi=hi/10u;
+   let top=(hi%10u)*65536u+(lo>>16u);
+   let middle=top/10u;
+   let bottom=(top%10u)*65536u+(lo&0xffffu);
+   suffix[suffix_len]=0x30u+bottom%10u;
+   suffix_len=suffix_len+1u;
+   hi=qhi;lo=(middle<<16u)|(bottom/10u);
+   if((hi|lo)==0u){{break;}}
+  }}
+ }}else{{
+  suffix_len=4u;
+ }}
+ var out:array<u32,8>;
  if(P[0]==0u){{
-  var b=array<u32,16>(P[16],P[17],P[18],P[19],P[20],P[21],P[22],P[23],candidate,0x80000000u,0u,0u,0u,0u,0u,288u);out=compress(IV,b);
+  var b=array<u32,16>(P[16],P[17],P[18],P[19],P[20],P[21],P[22],P[23],0u,0u,0u,0u,0u,0u,0u,0u);
+  if(P[11]!=0u){{
+   for(var j=0u;j<suffix_len;j=j+1u){{
+    let pos=32u+j;let wi=pos>>2u;let sh=(3u-(pos&3u))*8u;
+    b[wi]=b[wi]|(suffix[suffix_len-1u-j]<<sh);
+   }}
+   let pos=32u+suffix_len;let wi=pos>>2u;let sh=(3u-(pos&3u))*8u;
+   b[wi]=b[wi]|(0x80u<<sh);b[15]=pos*8u;
+  }}else{{
+   b[8]=candidate;b[9]=0x80000000u;b[15]=288u;
+  }}
+  out=compress(IV,b);
   for(var r=1u;r<P[8];r=r+1u){{out=hash_prefix(out,P[9]);}}
  }}else{{
   var ib:array<u32,16>;var ob:array<u32,16>;for(var i=0u;i<16u;i=i+1u){{ib[i]=0x36363636u;ob[i]=0x5c5c5c5cu;}}
-  for(var i=0u;i<4u;i=i+1u){{ib[i]=ib[i]^P[20+i];ob[i]=ob[i]^P[20+i];}}ib[4]=ib[4]^candidate;ob[4]=ob[4]^candidate;let ipad=compress(IV,ib);let opad=compress(IV,ob);
-  var sm:array<u32,8>;for(var i=0u;i<4u;i=i+1u){{sm[i]=P[16+i];}}for(var i=4u;i<8u;i=i+1u){{sm[i]=0u;}}var u=hmac(ipad,opad,sm,4u,1u,20u);var acc=u;
+  for(var i=0u;i<4u;i=i+1u){{ib[i]=ib[i]^P[20+i];ob[i]=ob[i]^P[20+i];}}
+  if(P[11]!=0u){{
+   for(var j=0u;j<suffix_len;j=j+1u){{
+    let pos=16u+j;let wi=pos>>2u;let sh=(3u-(pos&3u))*8u;
+    let byte=suffix[suffix_len-1u-j]<<sh;
+    ib[wi]=ib[wi]^byte;ob[wi]=ob[wi]^byte;
+   }}
+  }}else{{ib[4]=ib[4]^candidate;ob[4]=ob[4]^candidate;}}
+  let ipad=compress(IV,ib);let opad=compress(IV,ob);
+  var sm:array<u32,8>;for(var i=0u;i<4u;i=i+1u){{sm[i]=P[16+i];}}for(var i=4u;i<8u;i=i+1u){{sm[i]=0u;}}
+  var u=hmac(ipad,opad,sm,4u,1u,20u);var acc=u;
   for(var r=1u;r<P[8];r=r+1u){{u=hmac(ipad,opad,u,8u,0u,32u);for(var i=0u;i<8u;i=i+1u){{acc[i]=acc[i]^u[i];}}}}out=acc;
  }}
- if(target_ok(out[0],out[1])&&atomicExchange(&R.flag,1u)==0u){{R.nonce_lo=candidate;R.nonce_hi=0u;for(var i=0u;i<8u;i=i+1u){{R.hash[i]=out[i];}}}}
+ if(target_ok(out[0],out[1])&&atomicExchange(&R.flag,1u)==0u){{
+  R.nonce_lo=candidate;R.nonce_hi=select(0u,candidate_hi,P[11]!=0u);
+  for(var i=0u;i<8u;i=i+1u){{R.hash[i]=out[i];}}
+ }}
 }}
 "
     )

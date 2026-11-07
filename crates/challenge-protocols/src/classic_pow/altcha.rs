@@ -593,16 +593,18 @@ pub(super) async fn solve_gpu(
     gpu: &challenge_solvers::gpu::GpuContext,
     challenge: Value,
 ) -> anyhow::Result<Result> {
-    ensure!(
-        altcha_counter_mode(&challenge)? == AltchaCounterMode::Uint32,
-        "ALTCHA WGPU supports uint32 counter mode only"
-    );
+    let counter_mode = altcha_counter_mode(&challenge)?;
     let challenge: AltchaChallenge =
         serde_json::from_value(challenge).context("invalid ALTCHA v2 challenge")?;
     let (message, target, mask, key_length) = altcha_fast_case(&challenge)
         .context("ALTCHA challenge shape is unsupported by the WGPU fast path")?;
     let mut solver = challenge_solvers::gpu::AltchaSha256Solver::from(message);
-    solver.set_limit(u64::from(u32::MAX) + 1);
+    if counter_mode == AltchaCounterMode::String {
+        solver.set_string_counter();
+        solver.set_limit(JS_MAX_SAFE_INTEGER + 1);
+    } else {
+        solver.set_limit(u64::from(u32::MAX) + 1);
+    }
     let started = Instant::now();
     let solution = solver
         .solve::<SOLVE_TYPE_MASK>(gpu, target, mask)
