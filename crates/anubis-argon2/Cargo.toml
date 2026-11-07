@@ -5,7 +5,6 @@ edition = "2024"
 license = "MIT OR Apache-2.0"
 description = "Optimized Rust Argon2id computation for Anubis challenge verification"
 repository = "https://github.com/codeandsolder/challenge-solvers"
-rust-version = "1.99"
 publish = false
 
 [dependencies]

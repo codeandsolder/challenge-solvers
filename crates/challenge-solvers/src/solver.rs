@@ -64,42 +64,32 @@ macro_rules! impl_decimal_solver {
 }
 
 /// Unified x86-64 solver facade.
-#[cfg(feature = "portable-simd")]
 #[cfg(target_arch = "x86_64")]
 pub mod x86;
 
 /// Shared stateful wrappers for portable wide-SIMD x86 backends.
-#[cfg(feature = "portable-simd")]
 #[cfg(target_arch = "x86_64")]
 #[doc(hidden)]
 pub mod wide_backend;
 
 /// Audited x86 target-feature entry points for the portable wide-SIMD kernels.
-#[cfg(feature = "portable-simd")]
 #[cfg(target_arch = "x86_64")]
 #[doc(hidden)]
 pub mod wide_backend_arch;
 
-#[cfg(feature = "portable-simd")]
 #[cfg(any(target_arch = "x86_64", target_arch = "x86"))]
 /// SHA-NI solver
 pub mod sha_ni;
 
 /// SIMD128 solver
-#[cfg(feature = "portable-simd")]
 #[cfg(target_arch = "wasm32")]
 pub mod simd128;
 
 /// Shared portable-SIMD implementation used by the wide x86 and WASM backends.
-#[cfg(feature = "portable-simd")]
 #[cfg(any(target_arch = "x86_64", target_arch = "wasm32"))]
 pub(crate) mod wide;
 
-#[cfg(all(
-    feature = "portable-simd",
-    feature = "internals",
-    target_arch = "x86_64"
-))]
+#[cfg(all(feature = "internals", target_arch = "x86_64"))]
 #[doc(hidden)]
 pub mod width_bench;
 
@@ -118,7 +108,6 @@ pub(crate) fn increment_ascii_decimal(digits: &mut [u8]) -> bool {
     true
 }
 
-#[cfg(feature = "portable-simd")]
 #[cfg(any(target_arch = "x86_64", target_arch = "x86"))]
 struct PreparedBinaryBlocks {
     blocks: [[u8; 64]; 2],
@@ -127,7 +116,6 @@ struct PreparedBinaryBlocks {
     second_block_schedule: [u32; 64],
 }
 
-#[cfg(feature = "portable-simd")]
 #[cfg(any(target_arch = "x86_64", target_arch = "x86"))]
 fn prepare_binary_blocks(message: &crate::message::BinaryMessage) -> Option<PreparedBinaryBlocks> {
     let salt = &message.salt_residual[..message.salt_residual_len];
@@ -164,7 +152,6 @@ fn prepare_binary_blocks(message: &crate::message::BinaryMessage) -> Option<Prep
     })
 }
 
-#[cfg(feature = "portable-simd")]
 #[cfg(any(target_arch = "x86_64", target_arch = "x86"))]
 fn patch_cerberus_decimal_residual(
     mut message: [u8; 64],
@@ -191,7 +178,6 @@ fn patch_cerberus_decimal_residual(
     message
 }
 
-#[cfg(feature = "portable-simd")]
 #[cfg(any(target_arch = "x86_64", target_arch = "x86"))]
 fn cerberus_decimal_nonce(
     position_mod: usize,
@@ -239,16 +225,12 @@ pub const SOLVE_TYPE_MASK: u8 = 4;
 /// `mask` is ignored.
 pub const SOLVE_TYPE_LEADING_ZERO_BITS: u8 = 8;
 
-#[cfg(feature = "portable-simd")]
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 pub(crate) const HMAC_IPAD: u8 = 0x36;
-#[cfg(feature = "portable-simd")]
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 pub(crate) const HMAC_IPAD32: u32 = u32::from_be_bytes([HMAC_IPAD; 4]);
-#[cfg(feature = "portable-simd")]
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 pub(crate) const HMAC_OPAD: u8 = 0x5c;
-#[cfg(feature = "portable-simd")]
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 pub(crate) const HMAC_OPAD32: u32 = u32::from_be_bytes([HMAC_OPAD; 4]);
 

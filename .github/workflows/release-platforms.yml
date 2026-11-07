@@ -9,21 +9,6 @@ permissions:
   contents: read
 
 jobs:
-  stable-fallback:
-    name: Stable Rust 1.99 scalar validation
-    uses: codeandsolder/ci-workflows/.github/workflows/rust-sccache.yml@c6fcb5f8920460c109ee87152506c3d97889ed4e # main
-    with:
-      rust-toolchain: "1.99.0"
-      validation-tier: release
-      rustflags: ""
-      timeout-minutes: 25
-      command: |
-        export CARGO_PROFILE_TEST_OPT_LEVEL=0 CARGO_PROFILE_TEST_DEBUG=0 CARGO_BUILD_JOBS=2
-        cargo test --locked -p challenge-solvers --no-default-features --features std,anubis,altcha,capjs,cerberus,goaway,mcaptcha
-        cargo test --locked -p challenge-protocols --no-default-features
-        cargo test --locked -p challenge-hashx --no-default-features
-        cargo test --locked -p anubis-argon2
-
   full-backends:
     name: Full feature and accelerator regressions
     uses: codeandsolder/ci-workflows/.github/workflows/rust-sccache.yml@c6fcb5f8920460c109ee87152506c3d97889ed4e # main
@@ -46,7 +31,7 @@ jobs:
       rustflags: "-C target-feature=+simd128"
       timeout-minutes: 30
       command: |
-        cargo check --locked --target wasm32-wasip1 -p challenge-solvers --no-default-features --features std,portable-simd,compare-64bit
+        cargo check --locked --target wasm32-wasip1 -p challenge-solvers --no-default-features --features std,compare-64bit
 
   arm64:
     name: AArch64 portable CPU compile
@@ -58,5 +43,5 @@ jobs:
       rustflags: ""
       timeout-minutes: 30
       command: |
-        cargo check --locked --target aarch64-unknown-linux-gnu -p challenge-solvers --no-default-features --features std,portable-simd,compare-64bit
+        cargo check --locked --target aarch64-unknown-linux-gnu -p challenge-solvers --no-default-features --features std,compare-64bit
         cargo check --locked --target aarch64-unknown-linux-gnu -p anubis-argon2

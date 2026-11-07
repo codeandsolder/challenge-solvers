@@ -1,4 +1,4 @@
-#![cfg_attr(feature = "portable-simd", feature(portable_simd))]
+#![feature(portable_simd)]
 #![cfg_attr(feature = "gpu", recursion_limit = "256")]
 #![cfg_attr(not(any(test, feature = "std")), no_std)]
 #![doc = "Feature-configurable proof-of-work solver core."]
@@ -14,7 +14,6 @@ extern crate alloc;
 /// GPU solver backend using native `wgpu` or browser WebGPU.
 pub mod gpu;
 
-#[cfg(feature = "portable-simd")]
 #[cfg(any(target_arch = "x86_64", target_arch = "x86", target_arch = "wasm32"))]
 cfg_if::cfg_if! {
     if #[cfg(feature = "internals")] {
@@ -78,7 +77,6 @@ pub(crate) const fn high_u32(value: u64) -> u32 {
     u32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]])
 }
 
-#[cfg(feature = "portable-simd")]
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 #[expect(
     clippy::inline_always,
@@ -89,7 +87,6 @@ pub(crate) const fn read_be_word_byte(words: &[u32; 16], byte_index: usize) -> u
     words[byte_index / 4].to_be_bytes()[byte_index % 4]
 }
 
-#[cfg(feature = "portable-simd")]
 #[expect(
     clippy::inline_always,
     reason = "byte insertion is an inner-loop primitive in solver kernels"
@@ -123,29 +120,6 @@ pub(crate) fn write_le_word_byte(words: &mut [u32; 16], byte_index: usize, byte:
     *word = (*word & !mask) | (u32::from(byte) << shift);
 }
 
-#[cfg(not(feature = "portable-simd"))]
-/// Scalar SHA-256 solver for ALTCHA-compatible challenges.
-pub type AltchaSha256Solver = crate::solver::safe::AltchaSha256Solver;
-#[cfg(not(feature = "portable-simd"))]
-/// Scalar single-block SHA-256 solver.
-pub type SingleBlockSolver = crate::solver::safe::SingleBlockSolver;
-#[cfg(not(feature = "portable-simd"))]
-/// Scalar double-block SHA-256 solver.
-pub type DoubleBlockSolver = crate::solver::safe::DoubleBlockSolver;
-#[cfg(not(feature = "portable-simd"))]
-/// Scalar decimal-nonce SHA-256 solver.
-pub type DecimalSolver = crate::solver::safe::DecimalSolver;
-#[cfg(not(feature = "portable-simd"))]
-/// Scalar binary-nonce SHA-256 solver.
-pub type BinarySolver = crate::solver::safe::BinarySolver;
-#[cfg(not(feature = "portable-simd"))]
-/// Scalar `GoAway` SHA-256 solver.
-pub type GoAwaySolver = crate::solver::safe::GoAwaySolver;
-#[cfg(not(feature = "portable-simd"))]
-/// Scalar Cerberus solver.
-pub type CerberusSolver = crate::solver::safe::CerberusSolver;
-
-#[cfg(feature = "portable-simd")]
 cfg_if::cfg_if! {
     if #[cfg(target_arch = "x86_64")] {
         /// ALTCHA SHA-256 solver selected at runtime for this CPU.

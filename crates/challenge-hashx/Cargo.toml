@@ -2,7 +2,6 @@
 name = "challenge-hashx"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.99"
 license = "MIT OR Apache-2.0"
 description = "Reusable Anubis HashX native-JIT, Vulkan and SM75 CUDA proof solvers"
 repository = "https://github.com/codeandsolder/challenge-solvers"

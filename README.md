@@ -16,7 +16,7 @@ cryptographic search machinery extracted from
 - [anubis-argon2](crates/anubis-argon2) — specialized Anubis Argon2id
   computation and tests.
 - [vendor/argon2-fast](vendor/argon2-fast) — locally modified Argon2 reference
-  dependency retained for the Anubis Argon2 regression suite. Licensing and
+  dependency used by the generic ALTCHA Argon2id adapter and Anubis differential tests. Licensing and
   upstream attribution are retained with the source.
 
 The workspace retains the original source history (imported as Git subtrees).
@@ -50,26 +50,18 @@ let result = anubis::solve_cpu(&challenge, 1_000_000)
 assert!(anubis::verify(&challenge, &result.answer));
 ```
 
-The default `challenge-protocols` feature enables the optimized portable-SIMD
-kernels and specialized Anubis Argon2id engine on pinned nightly Rust. To
-consume all protocol implementations on stable Rust 1.99 instead, disable the
-default feature:
+The pinned nightly toolchain and portable SIMD are required by the solver
+workspace, including CPU-only configurations. Disabling optional GPU support or
+protocol adapters does not disable the SIMD implementation.
 
-```toml
-challenge-protocols = { git = "https://github.com/codeandsolder/challenge-solvers", branch = "main", default-features = false }
-```
-
-This retains the same protocol API, including Anubis Argon2id, using a portable
-RustCrypto implementation for memory-hard hashing and scalar SHA search.
-
-`challenge-protocols` also provides `classic_pow::solve` for ALTCHA,
+The challenge-protocols package also provides `classic_pow::solve` for ALTCHA,
 Cap.js, Cerberus, go-away, haphash, mCaptcha, and Linear.pub, plus Anubis WASM
 SHA-256 and Argon2id. Protocol parsing, proof encoding and verification remain
 inside the crate; HTTP dispatch, routing and telemetry do not.
 
 ## Performance policy
 
-**Portable SIMD is a default backend, not an afterthought.** The workspace
+**Portable SIMD is mandatory, not an optional backend.** The workspace
 currently pins nightly Rust for `portable_simd`, with architecture-specific
 optimizations where measurements justify them. Scalar backends exist to test
 correctness, portability, and fallback, not to replace optimized algorithms.
@@ -81,9 +73,9 @@ toolchain, plus the shared strict Rust/Python policy. Every Rust-compiling job
 uses [the shared mandatory sccache workflow](https://github.com/codeandsolder/ci-workflows);
 a separate gate checks the age of newly introduced Cargo.lock dependencies.
 
-More expensive all-feature/GPU backend, stable Rust 1.99 scalar, AArch64 and
-WASM SIMD128 checks run on release tags. The scalar lane is a portability
-check, **not** a replacement for the optimized SIMD implementation.
+More expensive all-feature/GPU backend, AArch64 and WASM SIMD128 checks run on
+release tags. Explicit scalar solvers are retained for hardware fallback and
+performance comparisons, not for a separate stable-Rust build.
 
 [Renovate](renovate.json) tracks Cargo and immutable GitHub Actions references.
 Ordinary dependencies have a 72-hour age hold. Reviewed shared CI and strict

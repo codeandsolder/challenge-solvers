@@ -23,7 +23,7 @@ jobs:
       timeout-minutes: 15
       command: |
         cargo fmt --all -- --check
-        cargo test --locked -p challenge-solvers --no-default-features --features std,runtime-dispatch,portable-simd,all-challenges,compare-64bit
+        cargo test --locked -p challenge-solvers --no-default-features --features std,runtime-dispatch,all-challenges,compare-64bit
 
   protocol-solvers:
     name: Reusable protocol and Argon2 tests

@@ -5,7 +5,7 @@ Feature-configurable proof-of-work solvers used by `challenge-disasterer`.
 The crate intentionally separates three layers:
 
 1. shared message, SHA-256, BLAKE3, and solver primitives;
-2. optional portable-SIMD architecture dispatch and stateful wide-solver wrappers;
+2. required portable-SIMD execution with runtime architecture dispatch and stateful wide-solver wrappers;
 3. optional challenge/protocol modules.
 
 The challenge modules are independent Cargo features: `altcha`, `anubis`, `capjs`,
@@ -13,16 +13,15 @@ The challenge modules are independent Cargo features: `altcha`, `anubis`, `capjs
 disabling a protocol does not create a separate hashing/SIMD implementation: all
 protocols reuse the same solver core.
 
-Backend capability is a separate axis. `portable-simd` is enabled by default and turns on
-the optimized x86/WASM SIMD backends; disabling it leaves the public solver aliases backed
-by the scalar `safe` implementation and compiles on stable Rust. `gpu` implies
-`portable-simd`. This lets a consumer choose protocols and acceleration independently rather
-than selecting a second solver crate or duplicating challenge code.
+Portable SIMD is a required capability and the pinned nightly toolchain is mandatory.
+Architecture-specific acceleration is still runtime-dispatched: optimized SIMD kernels
+when supported, with scalar safe solvers retained as explicit comparison and hardware
+fallback implementations rather than a separate stable-Rust build surface.
 
-The stable scalar surface also exposes `solve_decimal_sha256_zero_nibbles`, a bounded
-protocol-agnostic decimal SHA-256 solver that reports exact attempted work.
+solve_decimal_sha256_zero_nibbles remains a bounded, protocol-agnostic
+decimal SHA-256 solver that reports exact attempted work.
 
-With `portable-simd` enabled on x86-64, the portable wide backend selects 16 logical `u32` lanes behind an
+On x86-64, the portable wide backend selects 16 logical u32 lanes behind an
 AVX-512F target-feature boundary, 8 lanes behind AVX2, and then falls through to
 SHA-NI or scalar implementations where applicable. The AVX2 and AVX-512 variants
 share one state-machine implementation and one set of portable-SIMD kernels; the

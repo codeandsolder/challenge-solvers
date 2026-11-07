@@ -6,10 +6,8 @@
     clippy::many_single_char_names,
     reason = "SHA-256 round state follows the canonical a-through-h notation"
 )]
-#[cfg(feature = "portable-simd")]
 pub mod portable;
 
-#[cfg(feature = "portable-simd")]
 #[cfg(any(target_arch = "x86_64", target_arch = "x86"))]
 pub mod sha_ni;
 
@@ -122,7 +120,7 @@ pub const fn do_message_schedule_k_w(w: &mut [u32; 64]) {
     }
 }
 
-#[cfg(all(test, feature = "portable-simd"))]
+#[cfg(test)]
 pub const fn deterministic_test_word(row: u32, column: u32, domain: u32) -> u32 {
     domain
         .wrapping_add(row.wrapping_mul(0x9e37_79b9))
@@ -141,14 +139,12 @@ pub fn digest_block(state: &mut [u32; 8], block: &[u32; 16]) {
 }
 
 /// ingest a message prefix into the state
-#[cfg(feature = "portable-simd")]
 #[inline(always)]
 pub fn ingest_message_prefix<const LEN: usize>(state: &mut [u32; 8], w: [u32; LEN]) {
     sha2_arx::<0>(state, &w);
 }
 
 /// scalar sha2 rounds for hotstart taken verbatim from sha2 crate
-#[cfg(feature = "portable-simd")]
 #[inline(always)]
 pub fn sha2_arx<const START: usize>(state: &mut [u32; 8], w: &[u32]) {
     let [a, b, c, d, e, f, g, h] = &mut *state;

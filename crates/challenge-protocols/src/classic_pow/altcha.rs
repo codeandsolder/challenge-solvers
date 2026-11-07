@@ -1,8 +1,9 @@
-use std::{num::NonZeroU32, time::Instant};
+use std::{borrow::Cow, num::NonZeroU32, time::Instant};
 
 use anyhow::{Context, bail, ensure};
 use argon2::{
-    Algorithm as Argon2Algorithm, Argon2, Params as Argon2Params, Version as Argon2Version,
+    Algorithm as Argon2Algorithm, Argon2, Block as Argon2Block, Params as Argon2Params,
+    Version as Argon2Version,
 };
 use challenge_solvers::{AltchaSha256Solver, message::AltchaMessage, solver::SOLVE_TYPE_MASK};
 use pbkdf2::pbkdf2_hmac;
@@ -26,11 +27,11 @@ fn altcha_solver(
         Implementation::Safe => Ok(Box::new(
             challenge_solvers::solver::safe::AltchaSha256Solver::from(message),
         )),
-        #[cfg(all(feature = "portable-simd", target_arch = "x86_64"))]
+        #[cfg(target_arch = "x86_64")]
         Implementation::Avx2 => Ok(Box::new(
             challenge_solvers::solver::x86::Avx2AltchaSha256Solver::from(message),
         )),
-        #[cfg(all(feature = "portable-simd", target_arch = "x86_64"))]
+        #[cfg(target_arch = "x86_64")]
         Implementation::Avx512 => Ok(Box::new(
             challenge_solvers::solver::x86::Avx512AltchaSha256Solver::from(message),
         )),
@@ -196,6 +197,41 @@ fn altcha_iterative_sha<D: Digest>(initial: &[u8], iterations: u32, key_length: 
     data
 }
 
+/// Reuses validated Argon2id parameters and the complete memory arena across
+/// counter attempts, independent of the ALTCHA counter encoding.
+struct AltchaArgon2Worker {
+    argon2: Argon2<'static>,
+    memory: Vec<Argon2Block>,
+    output: Vec<u8>,
+}
+
+impl AltchaArgon2Worker {
+    fn new(parameters: &AltchaChallengeParameters) -> anyhow::Result<Self> {
+        let params = Argon2Params::new(
+            parameters
+                .memory_cost
+                .context("ALTCHA Argon2id requires memoryCost")?,
+            parameters.cost,
+            parameters.parallelism.unwrap_or(1),
+            Some(parameters.key_length),
+        )
+        .context("invalid ALTCHA Argon2id parameters")?;
+        let memory = vec![Argon2Block::default(); params.block_count()];
+        Ok(Self {
+            argon2: Argon2::new(Argon2Algorithm::Argon2id, Argon2Version::V0x13, params),
+            memory,
+            output: vec![0; parameters.key_length],
+        })
+    }
+
+    fn derive(&mut self, password: &[u8], salt: &[u8]) -> anyhow::Result<&[u8]> {
+        self.argon2
+            .hash_password_into_with_memory(password, salt, &mut self.output, &mut self.memory)
+            .context("ALTCHA Argon2id derivation failed")?;
+        Ok(&self.output)
+    }
+}
+
 fn altcha_derive_key(
     parameters: &AltchaChallengeParameters,
     salt: &[u8],
@@ -254,23 +290,9 @@ fn altcha_derive_key(
                 .context("ALTCHA scrypt derivation failed")?;
             Ok(out)
         }
-        "ARGON2ID" => {
-            let params = Argon2Params::new(
-                parameters
-                    .memory_cost
-                    .context("ALTCHA Argon2id requires memoryCost")?,
-                parameters.cost,
-                parameters.parallelism.unwrap_or(1),
-                Some(key_length),
-            )
-            .context("invalid ALTCHA Argon2id parameters")?;
-            let argon2 = Argon2::new(Argon2Algorithm::Argon2id, Argon2Version::V0x13, params);
-            let mut out = vec![0_u8; key_length];
-            argon2
-                .hash_password_into(password, salt, &mut out)
-                .context("ALTCHA Argon2id derivation failed")?;
-            Ok(out)
-        }
+        "ARGON2ID" => AltchaArgon2Worker::new(parameters)?
+            .derive(password, salt)
+            .map(<[u8]>::to_vec),
         other => bail!("unsupported ALTCHA algorithm: {other}"),
     }
 }
@@ -304,6 +326,11 @@ fn solve_altcha_generic(
     let prefix = AltchaHexPrefix::parse(&parameters.key_prefix)?;
     let started = Instant::now();
     let mut password = Vec::with_capacity(nonce.len() + 16);
+    let mut argon2_worker = if parameters.algorithm.eq_ignore_ascii_case("ARGON2ID") {
+        Some(AltchaArgon2Worker::new(parameters)?)
+    } else {
+        None
+    };
 
     match counter_mode {
         AltchaCounterMode::Uint32 => {
@@ -311,11 +338,15 @@ fn solve_altcha_generic(
                 password.clear();
                 password.extend_from_slice(&nonce);
                 password.extend_from_slice(&counter.to_be_bytes());
-                let derived = altcha_derive_key(parameters, &salt, &password)?;
+                let derived = if let Some(worker) = argon2_worker.as_mut() {
+                    Cow::Borrowed(worker.derive(&password, &salt)?)
+                } else {
+                    Cow::Owned(altcha_derive_key(parameters, &salt, &password)?)
+                };
                 if prefix.matches(&derived) {
                     return Ok(altcha_generic_result(
                         u64::from(counter),
-                        derived,
+                        derived.into_owned(),
                         started,
                         "altcha-generic",
                     ));
@@ -329,11 +360,15 @@ fn solve_altcha_generic(
                 password.clear();
                 password.extend_from_slice(&nonce);
                 password.extend_from_slice(counter_buffer.format(counter).as_bytes());
-                let derived = altcha_derive_key(parameters, &salt, &password)?;
+                let derived = if let Some(worker) = argon2_worker.as_mut() {
+                    Cow::Borrowed(worker.derive(&password, &salt)?)
+                } else {
+                    Cow::Owned(altcha_derive_key(parameters, &salt, &password)?)
+                };
                 if prefix.matches(&derived) {
                     return Ok(altcha_generic_result(
                         counter,
-                        derived,
+                        derived.into_owned(),
                         started,
                         "altcha-string",
                     ));
@@ -466,6 +501,71 @@ pub(super) async fn solve_gpu(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn altcha_argon2_reused_memory_matches_reference_for_variable_parameters() -> anyhow::Result<()>
+    {
+        for (memory_kib, passes, lanes, key_length) in [
+            (32, 1, 1, 16),
+            (61, 2, 1, 32),
+            (96, 3, 2, 64),
+            (173, 2, 4, 96),
+        ] {
+            let parameters = AltchaChallengeParameters {
+                algorithm: "argon2id".to_owned(),
+                cost: passes,
+                key_length,
+                key_prefix: String::new(),
+                memory_cost: Some(memory_kib),
+                nonce: "00".repeat(16),
+                parallelism: Some(lanes),
+                salt: "01".repeat(16),
+            };
+            let mut worker = AltchaArgon2Worker::new(&parameters)?;
+            let params = Argon2Params::new(memory_kib, passes, lanes, Some(key_length))?;
+            let reference = Argon2::new(Argon2Algorithm::Argon2id, Argon2Version::V0x13, params);
+            for (password, salt) in [
+                (&b"sample-1"[..], &b"salt1234"[..]),
+                (&b"reused-arena-2"[..], &b"longer-salt-value"[..]),
+                (&b"sample-1"[..], &b"salt1234"[..]),
+            ] {
+                let mut expected = vec![0; key_length];
+                reference.hash_password_into(password, salt, &mut expected)?;
+                assert_eq!(worker.derive(password, salt)?, expected);
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn altcha_argon2_both_counter_modes_use_full_variable_length_output() -> anyhow::Result<()> {
+        let challenge = AltchaChallenge {
+            parameters: AltchaChallengeParameters {
+                algorithm: "argon2id".to_owned(),
+                cost: 2,
+                key_length: 96,
+                key_prefix: String::new(),
+                memory_cost: Some(97),
+                nonce: "31".repeat(16),
+                parallelism: Some(2),
+                salt: "43".repeat(16),
+            },
+        };
+        let salt = hex::decode(&challenge.parameters.salt)?;
+        let nonce = hex::decode(&challenge.parameters.nonce)?;
+        for (mode, counter_suffix) in [
+            (AltchaCounterMode::Uint32, &0_u32.to_be_bytes()[..]),
+            (AltchaCounterMode::String, &b"0"[..]),
+        ] {
+            let result = solve_altcha_generic(&challenge, mode)?;
+            assert_eq!(result.answer["counter"], 0);
+            let mut password = nonce.clone();
+            password.extend_from_slice(counter_suffix);
+            let expected = altcha_derive_key(&challenge.parameters, &salt, &password)?;
+            assert_eq!(result.answer["derivedKey"], hex::encode(expected));
+        }
+        Ok(())
+    }
 
     #[test]
     fn altcha_prefix_target_places_bytes_at_hash_front() -> anyhow::Result<()> {
