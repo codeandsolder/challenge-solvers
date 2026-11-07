@@ -7,6 +7,9 @@ use std::{borrow::Cow, string::String, vec::Vec};
 
 use bytemuck::{Pod, Zeroable};
 
+mod scrypt;
+pub use scrypt::ScryptRomixGpu;
+
 use crate::{high_u32, low_u32};
 use sha2::{Digest, Sha256};
 

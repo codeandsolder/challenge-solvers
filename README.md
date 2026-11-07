@@ -66,6 +66,25 @@ currently pins nightly Rust for `portable_simd`, with architecture-specific
 optimizations where measurements justify them. Scalar backends exist to test
 correctness, portability, and fallback, not to replace optimized algorithms.
 
+## Scrypt GPU ROMix primitive
+
+With the optional GPU feature, the shared solver exposes
+ScryptRomixGpu from the gpu module. It computes the RFC 7914
+memory-hard ROMix stage of scrypt for arbitrary independent 128*r-byte
+segments, including all p lanes, with the Salsa20/8 BlockMix transform.
+
+Callers perform the initial and final PBKDF2-HMAC-SHA256 stages themselves.
+The reusable GPU object owns the shader pipelines; each invocation partitions
+independent lanes into bounded scratch allocations using the *requested*
+WebGPU storage-buffer and dispatch limits, rather than an arbitrary N/r/p
+whitelist. Extremely memory-intensive parameters can exceed a single GPU
+storage binding, in which case the API returns an explicit device-limit error.
+
+This primitive is not yet an end-to-end ALTCHA scrypt GPU route. The reference
+tests compare complete PBKDF2/ROMix/PBKDF2 results against the independent
+RustCrypto scrypt implementation; the measured economics determine whether
+to move more of that pipeline onto the GPU.
+
 ## CI and dependency maintenance
 
 Each pull request runs portable-SIMD CPU regression tests on the pinned nightly
