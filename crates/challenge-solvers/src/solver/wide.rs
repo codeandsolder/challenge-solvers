@@ -671,9 +671,7 @@ fn altcha_compare_mask<const TYPE: u8>(mask: u64) -> u64 {
     }
 }
 
-// Keep the key-length-specialized SIMD kernel out of the dispatcher frame.
-// Inlining every variant made debug AVX2 ALTCHA exceed Tokio worker stacks.
-#[inline(never)]
+#[inline(always)]
 #[cfg(target_arch = "x86_64")]
 fn solve_altcha_nested_impl<const LANES: usize, const TYPE: u8, const KEY_WORDS: usize>(
     message: &crate::message::AltchaMessage,
@@ -927,9 +925,7 @@ pub fn solve_altcha_fallback<const TYPE: u8>(
     result
 }
 
-// Keep the key-length-specialized SIMD kernel out of the dispatcher frame.
-// Inlining every variant made debug AVX2 ALTCHA exceed Tokio worker stacks.
-#[inline(never)]
+#[inline(always)]
 #[cfg(target_arch = "x86_64")]
 pub fn solve_altcha_impl<const LANES: usize, const TYPE: u8>(
     message: &crate::message::AltchaMessage,

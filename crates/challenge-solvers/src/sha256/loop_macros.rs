@@ -1,3 +1,19 @@
+// The optimized kernel needs fully unrolled constant-index round schedules.
+// In unoptimized builds, however, each of the 64 expansions creates many
+// distinct portable-SIMD temporaries. Combined with 8 key-length variants,
+// this made an AVX2 ALTCHA dispatch reserve 0x4e89e0 bytes of stack.
+// Keep the *same* round body as a bounded loop when debug assertions are on;
+// the production expansion below is unchanged.
+#[cfg(debug_assertions)]
+macro_rules! repeat64 {
+    ($i:ident, $b:block) => {
+        for $i in 0..64 {
+            $b
+        }
+    };
+}
+
+#[cfg(not(debug_assertions))]
 #[rustfmt::skip]
 macro_rules! repeat64 {
     ($i:ident, $b:block) => {
