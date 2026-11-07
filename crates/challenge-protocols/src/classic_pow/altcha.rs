@@ -238,9 +238,20 @@ pub(super) fn auto_gpu_expected_work(challenge: &Value) -> Option<u128> {
 fn altcha_gpu_case(challenge: &AltchaChallenge) -> anyhow::Result<AltchaGpuCase> {
     let params = &challenge.parameters;
     ensure!(
-        (1..=32).contains(&params.key_length),
-        "ALTCHA GPU needs a final key length between 1 and 32 bytes"
+        params.key_length > 0,
+        "ALTCHA GPU key length must be positive"
     );
+    if params.algorithm == "SHA-256" {
+        ensure!(
+            params.key_length <= 32,
+            "ALTCHA iterative SHA-256 output cannot exceed 32 bytes"
+        );
+    } else if params.algorithm == "PBKDF2/SHA-256" {
+        ensure!(
+            u64::try_from(params.key_length).is_ok_and(|n| n <= u64::from(u32::MAX) * 32),
+            "ALTCHA PBKDF2-SHA256 output exceeds RFC 8018"
+        );
+    }
     let cost = NonZeroU32::new(params.cost).context("ALTCHA GPU cost must be positive")?;
     let input = match params.algorithm.as_str() {
         "SHA-256" => AltchaGpuInput::Sha256 {
@@ -714,10 +725,15 @@ pub(super) async fn solve_gpu(
             challenge_solvers::gpu::AltchaSha256Solver::for_sha256_prefix(&salt, &nonce, cost)?
         }
         AltchaGpuInput::Pbkdf2Fixed(message) => {
-            challenge_solvers::gpu::AltchaSha256Solver::from(message)
+            let mut solver = challenge_solvers::gpu::AltchaSha256Solver::from(message);
+            solver.set_pbkdf2_key_length(gpu_case.key_length)?;
+            solver
         }
         AltchaGpuInput::Pbkdf2General { salt, nonce, cost } => {
-            challenge_solvers::gpu::AltchaSha256Solver::for_pbkdf2(&salt, &nonce, cost)?
+            let mut solver =
+                challenge_solvers::gpu::AltchaSha256Solver::for_pbkdf2(&salt, &nonce, cost)?;
+            solver.set_pbkdf2_key_length(gpu_case.key_length)?;
+            solver
         }
     };
     solver.set_prefix_nibbles(&gpu_case.prefix)?;
@@ -733,8 +749,14 @@ pub(super) async fn solve_gpu(
         .await?
         .context("ALTCHA GPU search exhausted configured limit")?;
     let solve_ms = started.elapsed().as_secs_f64() * 1000.0;
-    let derived_key = encode_words_be(solution.hash);
-    let derived_key = &derived_key[..gpu_case.key_length * 2];
+    let verified_key = solver
+        .verified_key()
+        .context("ALTCHA GPU did not retain its independently verified derived key")?;
+    let derived_key = hex::encode(
+        verified_key
+            .get(..gpu_case.key_length)
+            .context("ALTCHA GPU returned a short verified derived key")?,
+    );
     Ok(Result {
         answer: json!({
             "counter": solution.nonce,

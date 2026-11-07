@@ -15,7 +15,7 @@ fn target_ok(out:array<u32,8>)->bool{
  let ty=P[3];
  if(ty==4u&&P[12]!=0u){
   // Compare each hex nibble, including odd lengths and all 32 digest bytes.
-  for(var i=0u;i<P[12];i=i+1u){
+  for(var i=0u;i<min(P[12],64u);i=i+1u){
    let actual=(out[i/8u]>>((7u-i%8u)*4u))&15u;
    let expected=(P[32u+i/8u]>>((7u-i%8u)*4u))&15u;
    if(actual!=expected){return false;}
@@ -91,7 +91,7 @@ fn sha256_suffix(candidate:u32,suffix:array<u32,16>,suffix_len:u32)->array<u32,8
 // P[64..] contains fully padded U1 inner message blocks for salt || INT(1).
 // They are candidate-independent, but each candidate must compress them
 // from its own ipad-derived chaining state.
-fn pbkdf2_general(candidate:u32,suffix:array<u32,16>,suffix_len:u32)->array<u32,8>{
+fn pbkdf2_general(candidate:u32,suffix:array<u32,16>,suffix_len:u32,block_index:u32)->array<u32,8>{
  var key:array<u32,16>;
  for(var i=0u;i<16u;i=i+1u){key[i]=0u;}
  let nonce_len=P[13];
@@ -125,7 +125,25 @@ fn pbkdf2_general(candidate:u32,suffix:array<u32,16>,suffix_len:u32)->array<u32,
  var inner=ipad;
  for(var block=0u;block<P[25];block=block+1u){
   var w:array<u32,16>;
-  for(var i=0u;i<16u;i=i+1u){w[i]=P[64u+block*16u+i];}
+  for(var i=0u;i<16u;i=i+1u){
+   w[i]=P[64u+block*16u+i];
+   if(block_index!=1u){
+    // The 4-byte PBKDF2 INT(block_index) follows the arbitrary salt.
+    // It may cross word and compression block boundaries.
+    let word_pos=block*64u+i*4u;
+    if(word_pos<P[26]+4u&&word_pos+4u>P[26]){
+     for(var j=0u;j<4u;j=j+1u){
+      let pos=word_pos+j;
+      if(pos>=P[26]&&pos<P[26]+4u){
+       let shift=(3u-j)*8u;
+       let index_shift=(3u-(pos-P[26]))*8u;
+       let byte=(block_index>>index_shift)&255u;
+       w[i]=(w[i]&~(255u<<shift))|(byte<<shift);
+      }
+     }
+    }
+   }
+  }
   inner=compress(inner,w);
  }
  var outer:array<u32,16>;
@@ -185,7 +203,7 @@ fn solve(@builtin(global_invocation_id) gid:vec3<u32>){
   }
   for(var r=1u;r<P[8];r=r+1u){out=hash_prefix(out,32u);}
  }else if(P[24]==2u){
-  out=pbkdf2_general(candidate,suffix,suffix_len);
+  out=pbkdf2_general(candidate,suffix,suffix_len,1u);
  }else{
   var ib:array<u32,16>;var ob:array<u32,16>;for(var i=0u;i<16u;i=i+1u){ib[i]=0x36363636u;ob[i]=0x5c5c5c5cu;}
   for(var i=0u;i<4u;i=i+1u){ib[i]=ib[i]^P[20+i];ob[i]=ob[i]^P[20+i];}
@@ -201,7 +219,27 @@ fn solve(@builtin(global_invocation_id) gid:vec3<u32>){
   var u=hmac(ipad,opad,sm,4u,1u,20u);var acc=u;
   for(var r=1u;r<P[8];r=r+1u){u=hmac(ipad,opad,u,8u,0u,32u);for(var i=0u;i<8u;i=i+1u){acc[i]=acc[i]^u[i];}}out=acc;
  }
- if(target_ok(out)&&atomicExchange(&R.flag,1u)==0u){
+ var matches=target_ok(out);
+ // PBKDF2 key lengths >32 bytes have multiple SHA-256 output blocks.
+ // Reject the first block early for almost every candidate, then evaluate
+ // additional blocks only after all preceding exact hex nibbles matched.
+ if(matches&&P[0]!=0u&&P[24]==2u&&P[12]>64u){
+  var current_block=1u;
+  var block_result=out;
+  for(var nibble=64u;nibble<P[12];nibble=nibble+1u){
+   let block_index=nibble/64u+1u;
+   if(block_index!=current_block){
+    block_result=pbkdf2_general(candidate,suffix,suffix_len,block_index);
+    current_block=block_index;
+   }
+   let extra=nibble-64u;
+   let expected=(P[P[28]+extra/8u]>>((7u-extra%8u)*4u))&15u;
+   let position=nibble%64u;
+   let actual=(block_result[position/8u]>>((7u-position%8u)*4u))&15u;
+   if(actual!=expected){matches=false;break;}
+  }
+ }
+ if(matches&&atomicExchange(&R.flag,1u)==0u){
   R.nonce_lo=candidate;R.nonce_hi=select(0u,candidate_hi,P[11]!=0u);
   for(var i=0u;i<8u;i=i+1u){R.hash[i]=out[i];}
  }

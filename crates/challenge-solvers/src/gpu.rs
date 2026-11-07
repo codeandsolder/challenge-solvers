@@ -1710,10 +1710,13 @@ pub struct AltchaSha256Solver {
     prefix_nibbles: Vec<u8>,
     sha_prefix: Option<AltchaShaPrefix>,
     pbkdf2_input: Option<AltchaPbkdf2Input>,
+    output_key_length: usize,
+    verified_key: Option<Vec<u8>>,
 }
 
 impl From<crate::message::AltchaMessage> for AltchaSha256Solver {
     fn from(message: crate::message::AltchaMessage) -> Self {
+        let output_key_length = message.key_length.get() as usize;
         Self {
             message,
             attempted_nonces: 0,
@@ -1723,6 +1726,8 @@ impl From<crate::message::AltchaMessage> for AltchaSha256Solver {
             prefix_nibbles: Vec::new(),
             sha_prefix: None,
             pbkdf2_input: None,
+            output_key_length,
+            verified_key: None,
         }
     }
 }
@@ -1790,18 +1795,48 @@ impl AltchaSha256Solver {
         Ok(solver)
     }
 
-    /// Require an exact hexadecimal prefix of the SHA-256 output, including
-    /// half-byte prefixes and all 64 nibbles. Empty means any digest matches.
+    /// Request any PBKDF2-SHA256 derived key size allowed by RFC 8018.
+    /// The first 32 bytes are computed for each candidate; additional
+    /// PBKDF2 blocks are computed on GPU only after earlier prefix blocks
+    /// match. The complete derived key is independently computed on CPU
+    /// only for the winning candidate.
+    ///
+    /// # Errors
+    ///
+    /// Rejects zero length, non-PBKDF2 inputs, and lengths beyond RFC 8018.
+    pub fn set_pbkdf2_key_length(&mut self, length: usize) -> Result<(), GpuError> {
+        let max_len = u64::from(u32::MAX) * 32;
+        if !self.message.pbkdf2 || length == 0 || !u64::try_from(length).is_ok_and(|n| n <= max_len)
+        {
+            return Err(GpuError::new("invalid PBKDF2-SHA256 derived key length"));
+        }
+        self.output_key_length = length;
+        self.verified_key = None;
+        Ok(())
+    }
+
+    /// The complete independently validated answer from the last successful
+    /// PBKDF2 GPU solve, rather than just the first SHA-256 output block.
+    #[must_use]
+    pub fn verified_key(&self) -> Option<&[u8]> {
+        self.verified_key.as_deref()
+    }
+
+    /// Require an exact hexadecimal prefix of the derived output, including
+    /// half-byte prefixes. SHA-256 accepts up to 64 nibbles; the general
+    /// PBKDF2 solver also accepts prefixes spanning multiple digest blocks.
     ///
     /// The input is nibble values (0..=15), rather than ASCII hex digits.
     ///
     /// # Errors
     ///
-    /// Rejects prefixes longer than SHA-256 or malformed nibble values.
+    /// Rejects malformed nibbles and multi-block prefixes on unsupported inputs.
     pub fn set_prefix_nibbles(&mut self, nibbles: &[u8]) -> Result<(), GpuError> {
-        if nibbles.len() > 64 || nibbles.iter().any(|&nibble| nibble > 15) {
+        if (nibbles.len() > 64 && self.pbkdf2_input.is_none())
+            || nibbles.iter().any(|&nibble| nibble > 15)
+        {
             return Err(GpuError::new(
-                "ALTCHA GPU prefix must contain <=64 valid hex nibbles",
+                "ALTCHA GPU prefix requires valid hex nibbles and a multi-block PBKDF2 input beyond 64",
             ));
         }
         self.prefix_nibbles.clear();
@@ -1850,6 +1885,7 @@ impl AltchaSha256Solver {
             u64::from(u32::MAX) + 1
         };
         let limit = self.limit.min(counter_limit);
+        self.verified_key = None;
         let desired = gpu_batch_target(
             expected_work_full64::<TYPE>(target, mask),
             u64::from(WG_SIZE),
@@ -1879,9 +1915,10 @@ impl AltchaSha256Solver {
             p[8] = self.message.cost.get();
             p[9] = self.message.key_length.get().min(32);
             p[12] = gpu_usize_u32(self.prefix_nibbles.len(), "ALTCHA prefix length")?;
-            // Eight hex nibbles per u32. Unlike the legacy first-64-bit
-            // target/mask comparison, this carries the entire SHA-256 prefix.
-            for (index, nibble) in self.prefix_nibbles.iter().enumerate() {
+            // Compare the first SHA-256 digest block for all candidates.
+            // Additional PBKDF2 blocks are needed only when all 64 initial
+            // nibbles matched; store their expected values after U1 blocks.
+            for (index, nibble) in self.prefix_nibbles.iter().take(64).enumerate() {
                 p[32 + index / 8] |= u32::from(*nibble) << ((7 - index % 8) * 4);
             }
             p[16..20].copy_from_slice(&be_words_4(&self.message.salt));
@@ -1900,13 +1937,31 @@ impl AltchaSha256Solver {
             }
             if let Some(input) = &self.pbkdf2_input {
                 p[25] = gpu_usize_u32(input.u1_blocks.len() / 16, "PBKDF2 salt block count")?;
+                p[26] = gpu_usize_u32(input.salt.len(), "PBKDF2 salt length")?;
+            }
+            if self.prefix_nibbles.len() > 64 {
+                if self.pbkdf2_input.is_none() {
+                    return Err(GpuError::new(
+                        "multi-block prefixes require general PBKDF2 input",
+                    ));
+                }
+                p[28] = gpu_usize_u32(p.len(), "PBKDF2 prefix buffer offset")?;
+                let suffix_nibbles = &self.prefix_nibbles[64..];
+                let suffix_words = suffix_nibbles.len().div_ceil(8);
+                let start = p.len();
+                p.resize(start + suffix_words, 0);
+                for (index, nibble) in suffix_nibbles.iter().enumerate() {
+                    p[start + index / 8] |= u32::from(*nibble) << ((7 - index % 8) * 4);
+                }
             }
 
             if let Some((nonce, hash)) = gpu.dispatch_altcha(&p, wgs).await? {
                 self.attempted_nonces = base + batch - self.start_nonce;
-                if !verify_altcha::<TYPE>(self, nonce, hash, target, mask) {
+                let Some(verified_key) = verify_altcha::<TYPE>(self, nonce, hash, target, mask)
+                else {
                     return Err(GpuError::new("GPU returned an invalid Altcha proof"));
-                }
+                };
+                self.verified_key = Some(verified_key);
                 return Ok(Some(GpuSolution {
                     nonce,
                     hash,
@@ -2183,50 +2238,53 @@ fn verify_altcha<const TYPE: u8>(
     hash: [u32; 8],
     target: u64,
     mask: u64,
-) -> bool {
+) -> Option<Vec<u8>> {
     let message = &solver.message;
-    let string_counter = solver.string_counter;
     let prefix_nibbles = &solver.prefix_nibbles;
-    let sha_prefix = solver.sha_prefix.as_ref();
-    let pbkdf2_input = solver.pbkdf2_input.as_ref();
-    if (!string_counter && nonce > u64::from(u32::MAX))
-        || (string_counter && nonce >= (1_u64 << 53))
+    if (!solver.string_counter && nonce > u64::from(u32::MAX))
+        || (solver.string_counter && nonce >= (1_u64 << 53))
+        || prefix_nibbles.len() > solver.output_key_length.saturating_mul(2)
     {
-        return false;
+        return None;
     }
-    let suffix = if string_counter {
+    let suffix = if solver.string_counter {
         nonce.to_string().into_bytes()
     } else {
         nonce.to_be_bytes()[4..].to_vec()
     };
-    let expected = if message.pbkdf2 {
+    let mut derived_key = if message.pbkdf2 {
+        let input = solver.pbkdf2_input.as_ref();
         let mut password = Vec::with_capacity(
-            pbkdf2_input.map_or(16, |input| input.key_prefix.fixed_bytes.len()) + suffix.len(),
+            input.map_or(16, |value| value.key_prefix.fixed_bytes.len()) + suffix.len(),
         );
-        if let Some(input) = pbkdf2_input {
-            password.extend_from_slice(&input.key_prefix.fixed_bytes);
+        if let Some(value) = input {
+            password.extend_from_slice(&value.key_prefix.fixed_bytes);
         } else {
             password.extend_from_slice(&message.nonce);
         }
         password.extend_from_slice(&suffix);
-        let salt = pbkdf2_input.map_or(message.salt.as_slice(), |input| input.salt.as_slice());
-        let mut output = [0_u8; 32];
-        if pbkdf2::pbkdf2::<pbkdf2::hmac::Hmac<Sha256>>(
+        let salt = input.map_or(message.salt.as_slice(), |value| value.salt.as_slice());
+        let mut output = Vec::new();
+        let len = solver.output_key_length.max(32);
+        output.try_reserve_exact(len).ok()?;
+        output.resize(len, 0);
+        pbkdf2::pbkdf2::<pbkdf2::hmac::Hmac<Sha256>>(
             &password,
             salt,
             message.cost.get(),
             &mut output,
         )
-        .is_err()
-        {
-            return false;
-        }
-        be_words_8(&output)
+        .ok()?;
+        output
     } else {
         let mut first = Vec::with_capacity(
-            sha_prefix.map_or(32, |prefix| prefix.fixed_bytes.len()) + suffix.len(),
+            solver
+                .sha_prefix
+                .as_ref()
+                .map_or(32, |prefix| prefix.fixed_bytes.len())
+                + suffix.len(),
         );
-        if let Some(prefix) = sha_prefix {
+        if let Some(prefix) = &solver.sha_prefix {
             first.extend_from_slice(&prefix.fixed_bytes);
         } else {
             first.extend_from_slice(&message.salt);
@@ -2238,18 +2296,29 @@ fn verify_altcha<const TYPE: u8>(
         for _ in 1..message.cost.get() {
             digest = Sha256::digest(digest).into();
         }
-        be_words_8(&digest)
+        digest.to_vec()
     };
+    let first_digest: [u8; 32] = derived_key[..32].try_into().ok()?;
+    let first_hash = be_words_8(&first_digest);
     let prefix_matches = prefix_nibbles.iter().enumerate().all(|(index, expected)| {
-        let digit = (hash[index / 8] >> ((7 - index % 8) * 4)) & 0x0f;
-        digit == u32::from(*expected)
+        let byte = derived_key[index / 2];
+        let actual = if index.is_multiple_of(2) {
+            byte >> 4
+        } else {
+            byte & 0x0f
+        };
+        actual == *expected
     });
     let condition = if TYPE == crate::solver::SOLVE_TYPE_MASK && !prefix_nibbles.is_empty() {
         true // Full digest prefix supersedes the 64-bit target/mask.
     } else {
         result_matches_full64::<TYPE>(hash, target, mask)
     };
-    expected == hash && prefix_matches && condition
+    if first_hash != hash || !prefix_matches || !condition {
+        return None;
+    }
+    derived_key.truncate(solver.output_key_length);
+    Some(derived_key)
 }
 
 fn altcha_shader_source() -> String {
