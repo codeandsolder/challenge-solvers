@@ -13,7 +13,7 @@ fn compress(s:array<u32,8>,block:array<u32,16>)->array<u32,8>{
 }
 fn target_ok(out:array<u32,8>)->bool{
  let ty=P[3];
- if(ty==0u&&P[12]!=0u){
+ if(ty==4u&&P[12]!=0u){
   // Compare each hex nibble, including odd lengths and all 32 digest bytes.
   for(var i=0u;i<P[12];i=i+1u){
    let actual=(out[i/8u]>>((7u-i%8u)*4u))&15u;
