@@ -1650,7 +1650,7 @@ impl AltchaSha256Solver {
             p[20..24].copy_from_slice(&be_words_4(&self.message.nonce));
 
             if let Some((nonce, hash)) = gpu.dispatch_altcha(&p, wgs).await? {
-                self.attempted_nonces = base + batch;
+                self.attempted_nonces = base + batch - self.start_nonce;
                 if !verify_altcha::<TYPE>(
                     &self.message,
                     nonce,
@@ -1669,7 +1669,7 @@ impl AltchaSha256Solver {
             }
             base += batch;
         }
-        self.attempted_nonces = limit;
+        self.attempted_nonces = limit.saturating_sub(self.start_nonce);
         Ok(None)
     }
 
