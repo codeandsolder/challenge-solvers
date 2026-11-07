@@ -1581,8 +1581,8 @@ impl AltchaShaPrefix {
             ));
         }
         let mut state = crate::sha256::IV;
-        let mut chunks = fixed_bytes.chunks_exact(64);
-        for chunk in &mut chunks {
+        let (chunks, remainder) = fixed_bytes.as_chunks::<64>();
+        for chunk in chunks {
             let words: [u32; 16] = core::array::from_fn(|i| {
                 u32::from_be_bytes([
                     chunk[i * 4],
@@ -1593,7 +1593,6 @@ impl AltchaShaPrefix {
             });
             crate::sha256::digest_block(&mut state, &words);
         }
-        let remainder = chunks.remainder();
         let tail_len = remainder.len();
         let mut tail = [0_u8; 64];
         tail[..tail_len].copy_from_slice(remainder);
@@ -1772,16 +1771,7 @@ impl AltchaSha256Solver {
 
             if let Some((nonce, hash)) = gpu.dispatch_altcha(&p, wgs).await? {
                 self.attempted_nonces = base + batch - self.start_nonce;
-                if !verify_altcha::<TYPE>(
-                    &self.message,
-                    nonce,
-                    hash,
-                    target,
-                    mask,
-                    self.string_counter,
-                    &self.prefix_nibbles,
-                    self.sha_prefix.as_ref(),
-                ) {
+                if !verify_altcha::<TYPE>(self, nonce, hash, target, mask) {
                     return Err(GpuError::new("GPU returned an invalid Altcha proof"));
                 }
                 return Ok(Some(GpuSolution {
@@ -2055,15 +2045,16 @@ fn result_matches_full64<const TYPE: u8>(hash: [u32; 8], target: u64, mask: u64)
 }
 
 fn verify_altcha<const TYPE: u8>(
-    message: &crate::message::AltchaMessage,
+    solver: &AltchaSha256Solver,
     nonce: u64,
     hash: [u32; 8],
     target: u64,
     mask: u64,
-    string_counter: bool,
-    prefix_nibbles: &[u8],
-    sha_prefix: Option<&AltchaShaPrefix>,
 ) -> bool {
+    let message = &solver.message;
+    let string_counter = solver.string_counter;
+    let prefix_nibbles = &solver.prefix_nibbles;
+    let sha_prefix = solver.sha_prefix.as_ref();
     if (!string_counter && nonce > u64::from(u32::MAX))
         || (string_counter && nonce >= (1_u64 << 53))
     {
