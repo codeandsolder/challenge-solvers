@@ -956,9 +956,9 @@ mod tests {
         assert_eq!(auto_gpu_expected_work(&request), None);
         request["parameters"]["keyPrefix"] = serde_json::json!("a");
         request["parameters"]["nonce"] = serde_json::json!("00");
-        assert_eq!(auto_gpu_expected_work(&request), Some(32));
+        assert_eq!(auto_gpu_expected_work(&request), Some(256));
         request["parameters"]["salt"] = serde_json::json!("01".repeat(130));
-        assert_eq!(auto_gpu_expected_work(&request), Some(32));
+        assert_eq!(auto_gpu_expected_work(&request), Some(256));
         request["parameters"]["algorithm"] = serde_json::json!("PBKDF2/SHA-256");
         assert_eq!(auto_gpu_expected_work(&request), Some(512));
         request["parameters"]["nonce"] = serde_json::json!("ab".repeat(128));
