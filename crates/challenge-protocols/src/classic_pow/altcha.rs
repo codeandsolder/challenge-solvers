@@ -791,6 +791,36 @@ mod tests {
     }
 
     #[test]
+    fn altcha_cpu_auto_fast_short_prefix_respects_worker_stack() -> anyhow::Result<()> {
+        // Debug builds on AVX2 hosts previously overflowed Tokio's worker
+        // stack when the dispatcher inlined all specialized SIMD variants.
+        for (algorithm, cost) in [("SHA-256", 2), ("PBKDF2/SHA-256", 16)] {
+            let mut challenge = AltchaChallenge {
+                parameters: AltchaChallengeParameters {
+                    algorithm: algorithm.to_owned(),
+                    cost,
+                    key_length: 32,
+                    key_prefix: String::new(),
+                    memory_cost: None,
+                    nonce: "2a".repeat(16),
+                    parallelism: None,
+                    salt: "51".repeat(16),
+                },
+            };
+            let salt = hex::decode(&challenge.parameters.salt)?;
+            let mut password = hex::decode(&challenge.parameters.nonce)?;
+            password.extend_from_slice(&0_u32.to_be_bytes());
+            let expected = altcha_derive_key(&challenge.parameters, &salt, &password)?;
+            challenge.parameters.key_prefix = hex::encode(&expected[..1]);
+            let solved = try_solve_altcha_fast(&challenge, Implementation::Auto)?
+                .context("expected optimized ALTCHA search")?;
+            assert_eq!(solved.answer["counter"], 0);
+            assert_eq!(solved.answer["derivedKey"], hex::encode(expected));
+        }
+        Ok(())
+    }
+
+    #[test]
     fn altcha_optimized_sha_truncates_only_the_final_digest() -> anyhow::Result<()> {
         for algorithm in ["SHA-256", "PBKDF2/SHA-256"] {
             let mut challenge = AltchaChallenge {
