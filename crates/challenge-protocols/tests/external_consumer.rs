@@ -25,6 +25,7 @@ fn external_consumer_can_dispatch_classic_protocol_without_service() -> anyhow::
         "haphash",
         json!({"prefix": "external-crate:", "difficulty": 0}),
         Some("safe"),
+        1,
     )?;
     assert_eq!(result.implementation, "safe");
     assert!(

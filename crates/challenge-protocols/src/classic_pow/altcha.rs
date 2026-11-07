@@ -1,4 +1,13 @@
-use std::{borrow::Cow, num::NonZeroU32, time::Instant};
+use std::{
+    borrow::Cow,
+    num::NonZeroU32,
+    sync::{
+        Mutex,
+        atomic::{AtomicU64, Ordering},
+    },
+    thread,
+    time::Instant,
+};
 
 use anyhow::{Context, bail, ensure};
 use argon2::{
@@ -74,7 +83,11 @@ fn altcha_counter_mode(challenge: &Value) -> anyhow::Result<AltchaCounterMode> {
     }
 }
 
-pub(super) fn solve(challenge: Value, implementation: Implementation) -> anyhow::Result<Result> {
+pub(super) fn solve(
+    challenge: Value,
+    implementation: Implementation,
+    worker_count: usize,
+) -> anyhow::Result<Result> {
     if challenge.get("parameters").is_none() {
         return solve_altcha_v1(challenge, implementation);
     }
@@ -87,7 +100,7 @@ pub(super) fn solve(challenge: Value, implementation: Implementation) -> anyhow:
             matches!(implementation, Implementation::Auto | Implementation::Safe),
             "ALTCHA string-counter mode supports auto/safe implementations only"
         );
-        return solve_altcha_generic(&official, counter_mode);
+        return solve_altcha_generic(&official, counter_mode, worker_count);
     }
     if let Some(result) = try_solve_altcha_fast(&official, implementation)? {
         return Ok(result);
@@ -96,7 +109,7 @@ pub(super) fn solve(challenge: Value, implementation: Implementation) -> anyhow:
         matches!(implementation, Implementation::Auto | Implementation::Safe),
         "this ALTCHA algorithm supports auto/safe implementations only"
     );
-    solve_altcha_generic(&official, counter_mode)
+    solve_altcha_generic(&official, counter_mode, worker_count)
 }
 
 fn try_solve_altcha_fast(
@@ -302,6 +315,7 @@ fn altcha_generic_result(
     derived: Vec<u8>,
     started: Instant,
     implementation: &str,
+    attempted: u64,
 ) -> Result {
     let solve_ms = started.elapsed().as_secs_f64() * 1000.0;
     Result {
@@ -309,7 +323,7 @@ fn altcha_generic_result(
             "counter": counter,
             "derivedKey": hex::encode(derived),
             "time": solve_ms,
-            "attempted_nonces": counter.saturating_add(1),
+            "attempted_nonces": attempted,
         }),
         solve_ms,
         implementation: implementation.to_owned(),
@@ -319,12 +333,33 @@ fn altcha_generic_result(
 fn solve_altcha_generic(
     challenge: &AltchaChallenge,
     counter_mode: AltchaCounterMode,
+    worker_count: usize,
 ) -> anyhow::Result<Result> {
     let parameters = &challenge.parameters;
     let nonce = hex::decode(&parameters.nonce).context("invalid ALTCHA nonce hex")?;
     let salt = hex::decode(&parameters.salt).context("invalid ALTCHA salt hex")?;
     let prefix = AltchaHexPrefix::parse(&parameters.key_prefix)?;
+    if parameters.algorithm.eq_ignore_ascii_case("ARGON2ID") {
+        ensure!(
+            prefix.0.len() <= parameters.key_length.saturating_mul(2),
+            "ALTCHA Argon2id keyPrefix exceeds derived key length"
+        );
+    }
     let started = Instant::now();
+    if worker_count > 1
+        && !prefix.0.is_empty()
+        && parameters.algorithm.eq_ignore_ascii_case("ARGON2ID")
+    {
+        return solve_altcha_argon2_parallel(
+            parameters,
+            counter_mode,
+            &nonce,
+            &salt,
+            &prefix,
+            worker_count,
+            started,
+        );
+    }
     let mut password = Vec::with_capacity(nonce.len() + 16);
     let mut argon2_worker = if parameters.algorithm.eq_ignore_ascii_case("ARGON2ID") {
         Some(AltchaArgon2Worker::new(parameters)?)
@@ -349,6 +384,7 @@ fn solve_altcha_generic(
                         derived.into_owned(),
                         started,
                         "altcha-generic",
+                        u64::from(counter) + 1,
                     ));
                 }
             }
@@ -371,12 +407,101 @@ fn solve_altcha_generic(
                         derived.into_owned(),
                         started,
                         "altcha-string",
+                        counter + 1,
                     ));
                 }
             }
             bail!("ALTCHA string-counter search exhausted Number.MAX_SAFE_INTEGER")
         }
     }
+}
+
+/// Search disjoint, strided counter sequences with independent Argon2 arenas.
+/// A worker may finish after a larger counter succeeds, but all smaller
+/// counters are still checked before the smallest valid answer is returned.
+fn solve_altcha_argon2_parallel(
+    parameters: &AltchaChallengeParameters,
+    counter_mode: AltchaCounterMode,
+    nonce: &[u8],
+    salt: &[u8],
+    prefix: &AltchaHexPrefix,
+    workers: usize,
+    started: Instant,
+) -> anyhow::Result<Result> {
+    let upper_bound = match counter_mode {
+        AltchaCounterMode::Uint32 => u64::from(u32::MAX) + 1,
+        AltchaCounterMode::String => JS_MAX_SAFE_INTEGER + 1,
+    };
+    let stride = u64::try_from(workers).context("ALTCHA worker count overflow")?;
+    let best = AtomicU64::new(upper_bound);
+    let attempts = AtomicU64::new(0);
+    let winner = Mutex::new(None::<(u64, Vec<u8>)>);
+
+    thread::scope(|scope| -> anyhow::Result<()> {
+        let mut handles = Vec::with_capacity(workers);
+        for index in 0..workers {
+            let best = &best;
+            let attempts = &attempts;
+            let winner = &winner;
+            handles.push(scope.spawn(move || -> anyhow::Result<()> {
+                let mut worker = AltchaArgon2Worker::new(parameters)?;
+                let mut password = Vec::with_capacity(nonce.len() + 16);
+                password.extend_from_slice(nonce);
+                let mut buffer = itoa::Buffer::new();
+                let mut counter = u64::try_from(index).context("ALTCHA worker index overflow")?;
+                while counter < upper_bound && counter < best.load(Ordering::Acquire) {
+                    password.truncate(nonce.len());
+                    match counter_mode {
+                        AltchaCounterMode::Uint32 => {
+                            let n = u32::try_from(counter).context("ALTCHA uint32 overflow")?;
+                            password.extend_from_slice(&n.to_be_bytes());
+                        }
+                        AltchaCounterMode::String => {
+                            password.extend_from_slice(buffer.format(counter).as_bytes());
+                        }
+                    }
+                    let digest = worker.derive(&password, salt)?;
+                    attempts.fetch_add(1, Ordering::Relaxed);
+                    if prefix.matches(digest) {
+                        let previous = best.fetch_min(counter, Ordering::AcqRel);
+                        if counter < previous {
+                            let mut guard = winner
+                                .lock()
+                                .map_err(|_| anyhow::anyhow!("ALTCHA winner lock poisoned"))?;
+                            if guard.as_ref().is_none_or(|(current, _)| counter < *current) {
+                                *guard = Some((counter, digest.to_vec()));
+                            }
+                        }
+                        break;
+                    }
+                    counter = counter.checked_add(stride).unwrap_or(upper_bound);
+                }
+                Ok(())
+            }));
+        }
+        for handle in handles {
+            handle
+                .join()
+                .map_err(|_| anyhow::anyhow!("ALTCHA Argon2 worker panicked"))??;
+        }
+        Ok(())
+    })?;
+
+    let (counter, digest) = winner
+        .into_inner()
+        .map_err(|_| anyhow::anyhow!("ALTCHA winner lock poisoned"))?
+        .context("ALTCHA Argon2id search exhausted the counter domain")?;
+    let implementation = match counter_mode {
+        AltchaCounterMode::Uint32 => "altcha-generic",
+        AltchaCounterMode::String => "altcha-string",
+    };
+    Ok(altcha_generic_result(
+        counter,
+        digest,
+        started,
+        implementation,
+        attempts.load(Ordering::Relaxed),
+    ))
 }
 
 #[derive(Debug, Deserialize)]
@@ -557,12 +682,56 @@ mod tests {
             (AltchaCounterMode::Uint32, &0_u32.to_be_bytes()[..]),
             (AltchaCounterMode::String, &b"0"[..]),
         ] {
-            let result = solve_altcha_generic(&challenge, mode)?;
+            let result = solve_altcha_generic(&challenge, mode, 1)?;
             assert_eq!(result.answer["counter"], 0);
             let mut password = nonce.clone();
             password.extend_from_slice(counter_suffix);
             let expected = altcha_derive_key(&challenge.parameters, &salt, &password)?;
             assert_eq!(result.answer["derivedKey"], hex::encode(expected));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn altcha_argon2_parallel_search_preserves_lowest_valid_counter_and_counts_actual_work()
+    -> anyhow::Result<()> {
+        for (mode, lanes) in [
+            (AltchaCounterMode::Uint32, 1),
+            (AltchaCounterMode::String, 2),
+        ] {
+            let mut challenge = AltchaChallenge {
+                parameters: AltchaChallengeParameters {
+                    algorithm: "ARGON2ID".to_owned(),
+                    cost: 2,
+                    key_length: 96,
+                    key_prefix: String::new(),
+                    memory_cost: Some(97),
+                    nonce: "21".repeat(16),
+                    parallelism: Some(lanes),
+                    salt: "12".repeat(16),
+                },
+            };
+            let salt = hex::decode(&challenge.parameters.salt)?;
+            let mut password = hex::decode(&challenge.parameters.nonce)?;
+            let target = 9_u64;
+            match mode {
+                AltchaCounterMode::Uint32 => {
+                    password.extend_from_slice(&u32::try_from(target)?.to_be_bytes());
+                }
+                AltchaCounterMode::String => {
+                    password.extend_from_slice(target.to_string().as_bytes());
+                }
+            }
+            let expected = altcha_derive_key(&challenge.parameters, &salt, &password)?;
+            challenge.parameters.key_prefix = hex::encode(&expected);
+
+            let serial = solve_altcha_generic(&challenge, mode, 1)?;
+            let parallel = solve_altcha_generic(&challenge, mode, 4)?;
+            assert_eq!(serial.answer["counter"], target);
+            assert_eq!(parallel.answer["counter"], target);
+            assert_eq!(parallel.answer["derivedKey"], serial.answer["derivedKey"]);
+            assert!(parallel.answer["attempted_nonces"].as_u64().unwrap_or(0) >= target + 1);
+            assert_eq!(serial.answer["attempted_nonces"], target + 1);
         }
         Ok(())
     }
@@ -635,7 +804,7 @@ mod tests {
             (AltchaCounterMode::Uint32, "altcha-generic"),
             (AltchaCounterMode::String, "altcha-string"),
         ] {
-            let result = solve_altcha_generic(&challenge, mode)?;
+            let result = solve_altcha_generic(&challenge, mode, 1)?;
             assert_eq!(result.answer["counter"], 0);
             assert_eq!(result.implementation, implementation);
         }

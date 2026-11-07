@@ -47,7 +47,16 @@ struct HaphashChallenge {
 /// # Errors
 /// Rejects unsupported protocol/backend combinations or malformed input;
 /// propagates nonce-search exhaustion and independent proof-check failures.
-pub fn solve(kind: &str, challenge: Value, implementation: Option<&str>) -> anyhow::Result<Result> {
+pub fn solve(
+    kind: &str,
+    challenge: Value,
+    implementation: Option<&str>,
+    worker_count: usize,
+) -> anyhow::Result<Result> {
+    ensure!(
+        worker_count > 0,
+        "classic solver worker count must be nonzero"
+    );
     let implementation = Implementation::parse(implementation.unwrap_or("auto"))?;
     match kind {
         "cerberus" => solve_cerberus(challenge, implementation),
@@ -55,7 +64,7 @@ pub fn solve(kind: &str, challenge: Value, implementation: Option<&str>) -> anyh
         "capjs" => capjs::solve(challenge, implementation),
         "mcaptcha" => solve_mcaptcha(challenge, implementation),
         "haphash" => solve_haphash(challenge, implementation),
-        "altcha" => altcha::solve(challenge, implementation),
+        "altcha" => altcha::solve(challenge, implementation, worker_count),
         "linear" => crate::linear_pow::solve(challenge, implementation),
         _ => bail!("unsupported classic solver: {kind}"),
     }
@@ -569,7 +578,7 @@ mod tests {
     fn altcha_reference_backend_is_not_exposed_by_production() -> anyhow::Result<()> {
         for implementation in ["reference", "altcha-rust"] {
             let error = require_error(
-                solve("altcha", json!({"parameters": {}}), Some(implementation)),
+                solve("altcha", json!({"parameters": {}}), Some(implementation), 1),
                 "external ALTCHA reference solver must not be selectable in production",
             )?;
             assert!(
