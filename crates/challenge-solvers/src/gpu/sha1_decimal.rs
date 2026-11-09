@@ -1,6 +1,6 @@
 //! General GPU search for SHA-1(UTF-8/byte prefix || decimal u32 counter).
 //!
-//! RustCrypto compresses complete fixed-prefix blocks once on the host;
+//! The `RustCrypto` compression function processes complete fixed-prefix blocks once;
 //! every candidate on GPU finishes at most two SHA-1 blocks. Arbitrary prefix
 //! bytes and full exact 160-bit digest matching are supported.
 
@@ -8,7 +8,7 @@ use std::borrow::Cow;
 
 use sha1::{Digest, Sha1, block_api::compress};
 
-use super::{GpuContext, GpuError, WG_SIZE, gpu_u32};
+use super::{GpuContext, GpuError, WG_SIZE, gpu_u32, high_u32, low_u32};
 
 const INITIAL: [u32; 5] = [
     0x6745_2301,
@@ -100,8 +100,8 @@ impl Sha1DecimalGpuSolver {
         params[0] = base;
         params[1] = count;
         params[2] = gpu_u32(self.tail_len as u64, "SHA1 prefix tail length")?;
-        params[3] = self.prefix_len as u32;
-        params[4] = (self.prefix_len >> 32) as u32;
+        params[3] = low_u32(self.prefix_len);
+        params[4] = high_u32(self.prefix_len);
         params[5..10].copy_from_slice(&self.initial_state);
         for (index, bytes) in self.tail.as_chunks::<4>().0.iter().enumerate() {
             params[10 + index] = u32::from_be_bytes(*bytes);
