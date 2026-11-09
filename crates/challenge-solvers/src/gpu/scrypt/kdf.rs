@@ -1,7 +1,7 @@
-//! Complete scrypt KDF on WebGPU: PBKDF2, ROMix, and final PBKDF2.
+//! Complete scrypt KDF on WebGPU: PBKDF2, `ROMix`, and final PBKDF2.
 //!
 //! Only HMAC ipad/opad SHA256 chaining states are prepared on CPU, once per
-//! password. Both key-stretching phases and all ROMix scratch access remain
+//! password. Both key-stretching phases and all `ROMix` scratch access remain
 //! device-side, with a single final key readback.
 
 use std::borrow::Cow;
@@ -14,10 +14,10 @@ use super::{
 };
 use crate::sha256::{IV, digest_block};
 
-/// GPU scrypt, including both PBKDF2-HMAC-SHA256 stages and RFC 7914 ROMix.
+/// GPU scrypt, including both PBKDF2-HMAC-SHA256 stages and RFC 7914 `ROMix`.
 ///
 /// Each scrypt p-lane is independently mixed; large p is split into
-/// GPU-memory-bounded ROMix batches without copying intermediate B to host.
+/// GPU-memory-bounded `ROMix` batches without copying intermediate B to host.
 pub struct ScryptKdfGpu<'a> {
     romix: ScryptRomixGpu<'a>,
     layout: wgpu::BindGroupLayout,
@@ -71,7 +71,7 @@ impl<'a> ScryptKdfGpu<'a> {
         }
     }
 
-    /// Run both one-iteration PBKDF2-HMAC-SHA256 stages and RFC 7914 ROMix
+    /// Run both one-iteration PBKDF2-HMAC-SHA256 stages and RFC 7914 `ROMix`
     /// entirely on GPU. Returns the requested derived-key bytes.
     ///
     /// The host prepares candidate-independent ipad/opad SHA chaining states
@@ -129,7 +129,7 @@ impl<'a> ScryptKdfGpu<'a> {
             pass.set_bind_group(0, &key_binding, &[]);
             pass.dispatch_workgroups(spec.initial_workgroups, 1, 1);
         }
-        self.encode_romix(&mut encoder, &buffers, &spec)?;
+        self.encode_romix(&mut encoder, &buffers, &spec);
         {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("scrypt-final-pbkdf2"),
@@ -146,7 +146,7 @@ impl<'a> ScryptKdfGpu<'a> {
         result
             .try_reserve_exact(spec.key_length)
             .map_err(|error| GpuError::new(format!("allocate derived key: {error}")))?;
-        for word in data.chunks_exact(4) {
+        for word in data.as_chunks::<4>().0 {
             let native = u32::from_le_bytes([word[0], word[1], word[2], word[3]]);
             result.extend_from_slice(&native.to_be_bytes());
         }
@@ -159,7 +159,7 @@ impl<'a> ScryptKdfGpu<'a> {
         encoder: &mut wgpu::CommandEncoder,
         buffers: &KdfBuffers,
         spec: &KdfSpec,
-    ) -> Result<(), GpuError> {
+    ) {
         let gpu = self.romix.gpu;
         let device = &gpu.device;
         let scratch = allocate(
@@ -224,11 +224,10 @@ impl<'a> ScryptKdfGpu<'a> {
             }
             offset += lanes;
         }
-        Ok(())
     }
 }
 
-fn buffer_entry(binding: u32, ty: wgpu::BufferBindingType) -> wgpu::BindGroupLayoutEntry {
+const fn buffer_entry(binding: u32, ty: wgpu::BufferBindingType) -> wgpu::BindGroupLayoutEntry {
     wgpu::BindGroupLayoutEntry {
         binding,
         visibility: wgpu::ShaderStages::COMPUTE,
@@ -447,7 +446,7 @@ fn kdf_input(password: &[u8], salt: &[u8]) -> Result<Vec<u32>, GpuError> {
     let mut words = Vec::with_capacity(16 + padded / 4);
     words.extend_from_slice(&ipad);
     words.extend_from_slice(&opad);
-    for chunk in bytes.chunks_exact(4) {
+    for chunk in bytes.as_chunks::<4>().0 {
         words.push(u32::from_be_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]));
     }
     Ok(words)
