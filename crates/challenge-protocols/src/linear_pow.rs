@@ -214,6 +214,67 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "gpu")]
+    #[test]
+    fn linear_gpu_eligibility_is_shared_with_cpu_parser() {
+        assert_eq!(
+            auto_gpu_expected_work(&json!({"seed": LIVE_SEED})),
+            Some(1_u128 << 16)
+        );
+        assert_eq!(auto_gpu_expected_work(&json!({"seed": "bad"})), None);
+        assert_eq!(
+            auto_gpu_expected_work(&json!({
+                "seed": "G2BBE3B063367AB2F323D46D2ADA8A8A29BB5B58"
+            })),
+            None
+        );
+    }
+
+    #[cfg(feature = "gpu")]
+    #[test]
+    #[ignore = "requires a physical WGPU adapter"]
+    fn linear_gpu_full_protocol_cookie_roundtrip() -> anyhow::Result<()> {
+        use std::{
+            future::Future,
+            sync::Arc,
+            task::{Context as TaskContext, Poll, Wake, Waker},
+            time::Duration,
+        };
+
+        struct ThreadWake(std::thread::Thread);
+        impl Wake for ThreadWake {
+            fn wake(self: Arc<Self>) {
+                self.0.unpark();
+            }
+            fn wake_by_ref(self: &Arc<Self>) {
+                self.0.unpark();
+            }
+        }
+        fn block_on<F: Future>(future: F) -> F::Output {
+            let waker = Waker::from(Arc::new(ThreadWake(std::thread::current())));
+            let mut future = std::pin::pin!(future);
+            loop {
+                match future.as_mut().poll(&mut TaskContext::from_waker(&waker)) {
+                    Poll::Ready(value) => return value,
+                    Poll::Pending => std::thread::park_timeout(Duration::from_millis(100)),
+                }
+            }
+        }
+
+        let gpu = block_on(challenge_solvers::gpu::GpuContext::create())?;
+        let proof = block_on(solve_gpu(&gpu, json!({"seed": LIVE_SEED})))?;
+        let nonce = proof.answer["nonce"]
+            .as_u64()
+            .context("Linear GPU proof returned noninteger counter")?;
+        let digest = Sha1::digest(format!("{LIVE_SEED}{nonce}").as_bytes());
+        assert_eq!(&digest[7..9], &[0xb0, 0x0b]);
+        assert_eq!(proof.answer["cookie_name"], "yX3");
+        assert_eq!(proof.answer["cookie_value"], format!("{LIVE_SEED}{nonce}"));
+        assert_eq!(proof.answer["cookie"], format!("yX3={LIVE_SEED}{nonce}"));
+        assert_eq!(proof.implementation, "wgpu");
+        Ok(())
+    }
+
     #[test]
     fn rejects_non_auto_implementation() {
         assert!(solve(json!({"seed": LIVE_SEED}), Implementation::Safe).is_err());
