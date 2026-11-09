@@ -39,6 +39,21 @@ impl<'a> ScryptRomixGpu<'a> {
     /// Create reusable RFC 7914 `ROMix` GPU pipelines.
     #[must_use]
     pub fn new(gpu: &'a GpuContext) -> Self {
+        Self::compile_wgsl(gpu, include_str!("../shaders/scrypt_romix.wgsl"))
+    }
+
+    /// Compile the same `ROMix` implementation from a supplied WGSL source.
+    ///
+    /// Only available to internal benchmark tools: this allows shader
+    /// revisions to be measured interleaved on one device and queue without
+    /// exposing shader substitution to production callers.
+    #[cfg(feature = "internals")]
+    #[must_use]
+    pub fn new_from_wgsl(gpu: &'a GpuContext, source: &str) -> Self {
+        Self::compile_wgsl(gpu, source)
+    }
+
+    fn compile_wgsl(gpu: &'a GpuContext, source: &str) -> Self {
         let device = &gpu.device;
         let buffer_entry = |binding, ty| wgpu::BindGroupLayoutEntry {
             binding,
@@ -66,9 +81,7 @@ impl<'a> ScryptRomixGpu<'a> {
         });
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("challenge-solvers-scrypt-romix-shader"),
-            source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(include_str!(
-                "../shaders/scrypt_romix.wgsl"
-            ))),
+            source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(source)),
         });
         let create = |entry: &str| {
             device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
