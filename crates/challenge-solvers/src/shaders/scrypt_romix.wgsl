@@ -57,34 +57,83 @@ fn salsa20_8(input: array<u32,16>) -> array<u32,16> {
  );
 }
 
-fn blockmix(lane: u32) {
- let words_per_lane=32u*params.r;
- let base=(lane+params.offset)*words_per_lane;
- var x: array<u32,16>;
- for(var j=0u;j<16u;j++){
-  x[j]=state[base+(2u*params.r-1u)*16u+j];
+// RFC7914 requires N to be a power of two >=2, so each phase consists
+// of complete two-round pairs. Pin each round's input/output storage
+// direction outside the word loop rather than selecting it on every read
+// and write. Scratch XOR is fused into BlockMix's input words.
+// The two directed functions intentionally share the same Salsa20/8 core.
+
+fn blockmix_state_to_mixed(lane:u32,v_base:u32,xor_v:bool) {
+ let words=32u*params.r;
+ let base=(lane+params.offset)*words;
+ let aux=lane*words;
+ let last=(2u*params.r-1u)*16u;
+ var x:array<u32,16>;
+ for(var j=0u;j<16u;j++) {
+  x[j]=state[base+last+j];
+  if(xor_v){x[j]^=scratch[v_base+last+j];}
  }
- for(var i=0u;i<2u*params.r;i++){
-  for(var j=0u;j<16u;j++){x[j]^=state[base+i*16u+j];}
+ for(var i=0u;i<2u*params.r;i++) {
+  for(var j=0u;j<16u;j++) {
+   let pos=i*16u+j;
+   var word=state[base+pos];
+   if(xor_v){word^=scratch[v_base+pos];}
+   x[j]^=word;
+  }
   x=salsa20_8(x);
   let destination=(i/2u)+select(0u,params.r,(i&1u)!=0u);
-  for(var j=0u;j<16u;j++){mixed[lane*words_per_lane+destination*16u+j]=x[j];}
+  for(var j=0u;j<16u;j++) {
+   mixed[aux+destination*16u+j]=x[j];
+  }
  }
- for(var i=0u;i<words_per_lane;i++){state[base+i]=mixed[lane*words_per_lane+i];}
+}
+
+fn blockmix_mixed_to_state(lane:u32,v_base:u32,xor_v:bool) {
+ let words=32u*params.r;
+ let base=(lane+params.offset)*words;
+ let aux=lane*words;
+ let last=(2u*params.r-1u)*16u;
+ var x:array<u32,16>;
+ for(var j=0u;j<16u;j++) {
+  x[j]=mixed[aux+last+j];
+  if(xor_v){x[j]^=scratch[v_base+last+j];}
+ }
+ for(var i=0u;i<2u*params.r;i++) {
+  for(var j=0u;j<16u;j++) {
+   let pos=i*16u+j;
+   var word=mixed[aux+pos];
+   if(xor_v){word^=scratch[v_base+pos];}
+   x[j]^=word;
+  }
+  x=salsa20_8(x);
+  let destination=(i/2u)+select(0u,params.r,(i&1u)!=0u);
+  for(var j=0u;j<16u;j++) {
+   state[base+destination*16u+j]=x[j];
+  }
+ }
 }
 
 @compute @workgroup_size(64)
 fn fill(@builtin(global_invocation_id) gid:vec3<u32>) {
  let lane=gid.x;
  if(lane>=params.lanes){return;}
- let words_per_lane=32u*params.r;
- let base=(lane+params.offset)*words_per_lane;
- for(var round=0u;round<params.n;round++){
-  let address=(lane*params.n+round)*words_per_lane;
-  for(var word=0u;word<words_per_lane;word++){
-   scratch[address+word]=state[base+word];
+ let words=32u*params.r;
+ let base=(lane+params.offset)*words;
+ let aux=lane*words;
+ // Two rounds are needed to return state to B. Scratch V is populated
+ // from the corresponding input before each BlockMix.
+ for(var round=0u;round<params.n;round+=2u) {
+  let first=(lane*params.n+round)*words;
+  for(var word=0u;word<words;word++) {
+   scratch[first+word]=state[base+word];
   }
-  blockmix(lane);
+  blockmix_state_to_mixed(lane,0u,false);
+
+  let second=first+words;
+  for(var word=0u;word<words;word++) {
+   scratch[second+word]=mixed[aux+word];
+  }
+  blockmix_mixed_to_state(lane,0u,false);
  }
 }
 
@@ -92,16 +141,17 @@ fn fill(@builtin(global_invocation_id) gid:vec3<u32>) {
 fn mix(@builtin(global_invocation_id) gid:vec3<u32>) {
  let lane=gid.x;
  if(lane>=params.lanes){return;}
- let words_per_lane=32u*params.r;
- let base=(lane+params.offset)*words_per_lane;
- for(var round=0u;round<params.n;round++){
-  // Integerify: the little-endian 64-bit integer beginning at the last
-  // 64-byte chunk. N is a u32 power of two, so only its low 32 bits matter.
-  let index=state[base+(2u*params.r-1u)*16u]&(params.n-1u);
-  let address=(lane*params.n+index)*words_per_lane;
-  for(var word=0u;word<words_per_lane;word++){
-   state[base+word]^=scratch[address+word];
-  }
-  blockmix(lane);
+ let words=32u*params.r;
+ let base=(lane+params.offset)*words;
+ let aux=lane*words;
+ let last=(2u*params.r-1u)*16u;
+ for(var round=0u;round<params.n;round+=2u) {
+  let first_index=state[base+last]&(params.n-1u);
+  let first=(lane*params.n+first_index)*words;
+  blockmix_state_to_mixed(lane,first,true);
+
+  let second_index=mixed[aux+last]&(params.n-1u);
+  let second=(lane*params.n+second_index)*words;
+  blockmix_mixed_to_state(lane,second,true);
  }
 }
