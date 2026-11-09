@@ -7,6 +7,9 @@ use std::{borrow::Cow, string::String, vec::Vec};
 
 use bytemuck::{Pod, Zeroable};
 
+mod linear_sha1;
+pub use linear_sha1::{LinearSha1GpuSolver, LinearSha1Solution};
+
 mod altcha_sha512;
 pub use altcha_sha512::{AltchaSha64Algorithm, AltchaSha64GpuSolver, AltchaSha64Solution};
 

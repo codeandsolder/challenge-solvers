@@ -35,6 +35,7 @@ pub async fn solve(
         "mcaptcha" => solve_mcaptcha_gpu(gpu, challenge).await,
         "haphash" => solve_haphash_gpu(gpu, challenge).await,
         "altcha" => super::altcha::solve_gpu(gpu, challenge).await,
+        "linear" => crate::linear_pow::solve_gpu(gpu, challenge).await,
         _ => bail!("unsupported classic GPU solver: {kind}"),
     }
 }
