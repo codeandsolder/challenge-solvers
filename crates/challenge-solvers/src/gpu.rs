@@ -460,6 +460,7 @@ impl GpuContext {
         params.words[10] = 19 * 8;
         params.words[11] = u32::MAX;
         params.words[12] = u32::MAX;
+        params.words[13] = 8192; // Exercise the fast kernel in the warmup workgroup.
         self.queue.write_buffer(&self.out_buf, 0, &[0; 48]);
         self.queue
             .write_buffer(&self.in_buf, 0, bytemuck::bytes_of(&params));
@@ -594,6 +595,7 @@ impl GpuContext {
             let wgs = gpu_u32(batch.div_ceil(HASHES_PER_WG).max(1), "workgroup count")?;
             params.words[8] = low_u32(base);
             params.words[9] = high_u32(base);
+            params.words[13] = gpu_u32(batch, "fast SHA-256 batch size")?;
             self.queue
                 .write_buffer(&self.in_buf, 0, bytemuck::bytes_of(&params));
 
@@ -615,7 +617,7 @@ impl GpuContext {
             self.queue.submit([encoder.finish()]);
 
             let values = self.read_result().await?;
-            let dispatched = base.saturating_add(u64::from(wgs) * HASHES_PER_WG);
+            let dispatched = base + batch;
             if values[0] != 0 {
                 let counter = (u64::from(values[2]) << 32) | u64::from(values[1]);
                 let nonce = counter_to_decimal_nonce(counter);
@@ -723,6 +725,7 @@ impl GpuContext {
             let wgs = gpu_u32(batch.div_ceil(HASHES_PER_WG).max(1), "workgroup count")?;
             params.words[8] = low_u32(base);
             params.words[9] = high_u32(base);
+            params.words[13] = gpu_u32(batch, "fast SHA-256 batch size")?;
             self.queue
                 .write_buffer(&self.in_buf, 0, bytemuck::bytes_of(&params));
 
@@ -744,7 +747,7 @@ impl GpuContext {
             self.queue.submit([encoder.finish()]);
 
             let values = self.read_result().await?;
-            let dispatched = base.saturating_add(u64::from(wgs) * HASHES_PER_WG);
+            let dispatched = base + batch;
             if values[0] != 0 {
                 let counter = (u64::from(values[2]) << 32) | u64::from(values[1]);
                 let nonce = counter_to_decimal_nonce(counter);
@@ -2773,18 +2776,20 @@ fn shader_source() -> String {
     }
     format!(
         r"
-struct InParams {{ s0:u32,s1:u32,s2:u32,s3:u32,s4:u32,s5:u32,s6:u32,s7:u32,base_lo:u32,base_hi:u32,bitlen:u32,mask0:u32,mask1:u32 }};
+struct InParams {{ s0:u32,s1:u32,s2:u32,s3:u32,s4:u32,s5:u32,s6:u32,s7:u32,base_lo:u32,base_hi:u32,bitlen:u32,mask0:u32,mask1:u32,batch_size:u32 }};
 struct OutBuf {{ flag:atomic<u32>,nonce_lo:u32,nonce_hi:u32,hash:array<u32,8> }};
 @group(0) @binding(0) var<uniform> P:InParams;
 @group(0) @binding(1) var<storage,read_write> R:OutBuf;
 fn rotr(x:u32,n:u32)->u32{{return (x>>n)|(x<<(32u-n));}}
 @compute @workgroup_size({WG_SIZE})
 fn solve(@builtin(global_invocation_id) gid:vec3<u32>){{
+ let local_first=gid.x*{STEPS}u;if(local_first>=P.batch_size){{return;}}
  let gid_lo=gid.x<<7u;let gid_hi=gid.x>>25u;let base_lo=P.base_lo+gid_lo;var base_hi=P.base_hi+gid_hi;if(base_lo<P.base_lo){{base_hi=base_hi+1u;}}
  let d2=(base_lo>>6u)&7u;let d3=(base_lo>>9u)&7u;let d4=(base_lo>>12u)&7u;let d5=(base_lo>>15u)&7u;let d6=(base_lo>>18u)&7u;let d7=(base_lo>>21u)&7u;let d8=(base_lo>>24u)&7u;let d9=(base_lo>>27u)&7u;let d10=((base_lo>>30u)|(base_hi<<2u))&7u;let d11=(base_hi>>1u)&7u;let d12=(base_hi>>4u)&7u;let d13=(base_hi>>7u)&7u;let d14=(base_hi>>10u)&7u;let d15=(base_hi>>13u)&7u;let d16=(base_hi>>16u)&7u;let d17=(base_hi>>19u)&7u;
  let nw0=0x31303030u|(d17<<16u)|(d16<<8u)|d15;let nw1=0x30303030u|(d14<<24u)|(d13<<16u)|(d12<<8u)|d11;let nw2=0x30303030u|(d10<<24u)|(d9<<16u)|(d8<<8u)|d7;let nw3=0x30303030u|(d6<<24u)|(d5<<16u)|(d4<<8u)|d3;var nw4=0x30303080u|(d2<<24u);
  const GM:array<u32,7>=array<u32,7>(0x00000100u,0x00000200u,0x00000400u,0x00010000u,0x00020000u,0x00040000u,0x01000000u);
  for(var step=0u;step<{STEPS}u;step=step+1u){{
+  if(local_first+step>=P.batch_size){{return;}}
   if((step&{}u)==0u && atomicLoad(&R.flag)!=0u){{return;}}
   var w0=nw0;var w1=nw1;var w2=nw2;var w3=nw3;var w4=nw4;
   var w5=0u;var w6=0u;var w7=0u;var w8=0u;var w9=0u;var w10=0u;var w11=0u;var w12=0u;var w13=0u;var w14=0u;var w15=P.bitlen;
