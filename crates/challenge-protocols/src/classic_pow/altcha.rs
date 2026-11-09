@@ -217,6 +217,10 @@ struct AltchaGpuCase {
 /// official ALTCHA challenges can contain precomputed exact prefixes.
 #[cfg(feature = "gpu")]
 pub(super) fn auto_gpu_expected_work(challenge: &Value) -> Option<u128> {
+    if challenge.get("parameters").is_none() {
+        let case = parse_altcha_v1(challenge.clone()).ok()?;
+        return Some(u128::from(case.maxnumber.unwrap_or(1_000_000)) + 1);
+    }
     let counter_mode = altcha_counter_mode(challenge).ok()?;
     let parsed: AltchaChallenge = serde_json::from_value(challenge.clone()).ok()?;
     let gpu_case = altcha_gpu_case(&parsed).ok()?;
@@ -664,25 +668,107 @@ struct AltchaV1Challenge {
     signature: String,
 }
 
+fn parse_altcha_v1(challenge: Value) -> anyhow::Result<AltchaV1Challenge> {
+    let challenge: AltchaV1Challenge =
+        serde_json::from_value(challenge).context("invalid ALTCHA v1 challenge")?;
+    let digest_length = match challenge.algorithm.as_str() {
+        "SHA-1" => 40,
+        "SHA-256" => 64,
+        "SHA-512" => 128,
+        other => bail!("unsupported ALTCHA v1 algorithm: {other}"),
+    };
+    ensure!(
+        !challenge.signature.is_empty(),
+        "ALTCHA v1 signature must not be empty"
+    );
+    // The CPU protocol compares lowercase *hex strings*, not decoded bytes.
+    // Decode/re-encode parity prevents GPU from accepting noncanonical hex.
+    ensure!(
+        challenge.challenge.len() == digest_length
+            && hex::decode(&challenge.challenge)
+                .is_ok_and(|bytes| hex::encode(bytes) == challenge.challenge),
+        "ALTCHA v1 challenge must be a canonical lowercase full digest"
+    );
+    Ok(challenge)
+}
+
+#[cfg(feature = "gpu")]
+async fn solve_altcha_v1_gpu(
+    gpu: &challenge_solvers::gpu::GpuContext,
+    challenge: Value,
+) -> anyhow::Result<Result> {
+    let challenge = parse_altcha_v1(challenge)?;
+    let max = u64::from(challenge.maxnumber.unwrap_or(1_000_000)) + 1;
+    let target = hex::decode(&challenge.challenge)?;
+    let prefix = target
+        .iter()
+        .flat_map(|byte| [byte >> 4, byte & 15])
+        .collect::<Vec<u8>>();
+    let started = Instant::now();
+    let one = NonZeroU32::new(1).context("positive SHA iteration count")?;
+    let number = match challenge.algorithm.as_str() {
+        "SHA-256" => {
+            let mut solver = challenge_solvers::gpu::AltchaSha256Solver::for_sha256_prefix(
+                challenge.salt.as_bytes(),
+                &[],
+                one,
+            )?;
+            solver.set_string_counter();
+            solver.set_limit(max);
+            solver.set_prefix_nibbles(&prefix)?;
+            solver
+                .solve::<SOLVE_TYPE_MASK>(gpu, 0, 0)
+                .await?
+                .context("ALTCHA v1 SHA-256 GPU search exhausted maxnumber")?
+                .nonce
+        }
+        "SHA-512" => {
+            let mut solver = AltchaSha64GpuSolver::new(
+                AltchaSha64Algorithm::Sha512,
+                challenge.salt.as_bytes(),
+                &[],
+                one,
+                64,
+            )?;
+            solver.set_string_counter();
+            solver.set_limit(max);
+            solver.set_prefix_nibbles(&prefix)?;
+            solver
+                .solve(gpu)
+                .await?
+                .context("ALTCHA v1 SHA-512 GPU search exhausted maxnumber")?
+                .nonce
+        }
+        "SHA-1" => bail!("ALTCHA v1 SHA-1 GPU is not yet implemented"),
+        _ => unreachable!("validated ALTCHA v1 digest algorithm"),
+    };
+    let digest = match challenge.algorithm.as_str() {
+        "SHA-256" => hex::encode(Sha256::digest(
+            format!("{}{number}", challenge.salt).as_bytes(),
+        )),
+        "SHA-512" => hex::encode(Sha512::digest(
+            format!("{}{number}", challenge.salt).as_bytes(),
+        )),
+        _ => unreachable!("validated SHA-256/512 branch"),
+    };
+    ensure!(
+        digest == challenge.challenge && number < max,
+        "ALTCHA v1 GPU candidate failed independent full digest validation"
+    );
+    let solve_ms = started.elapsed().as_secs_f64() * 1000.0;
+    Ok(Result {
+        answer: json!({"number": number, "took": solve_ms}),
+        solve_ms,
+        implementation: "wgpu".to_owned(),
+    })
+}
+
 fn solve_altcha_v1(challenge: Value, implementation: Implementation) -> anyhow::Result<Result> {
     ensure!(
         matches!(implementation, Implementation::Auto | Implementation::Safe),
         "ALTCHA v1 supports auto/safe implementations only"
     );
-    let challenge: AltchaV1Challenge =
-        serde_json::from_value(challenge).context("invalid ALTCHA v1 challenge")?;
-    ensure!(
-        matches!(
-            challenge.algorithm.as_str(),
-            "SHA-1" | "SHA-256" | "SHA-512"
-        ),
-        "unsupported ALTCHA v1 algorithm: {}",
-        challenge.algorithm
-    );
-    ensure!(
-        !challenge.signature.is_empty(),
-        "ALTCHA v1 signature must not be empty"
-    );
+    let challenge = parse_altcha_v1(challenge)?;
     let max = challenge.maxnumber.unwrap_or(1_000_000);
     let started = Instant::now();
     for number in 0..=max {
@@ -773,6 +859,9 @@ pub(super) async fn solve_gpu(
     gpu: &challenge_solvers::gpu::GpuContext,
     challenge: Value,
 ) -> anyhow::Result<Result> {
+    if challenge.get("parameters").is_none() {
+        return solve_altcha_v1_gpu(gpu, challenge).await;
+    }
     let counter_mode = altcha_counter_mode(&challenge)?;
     let challenge: AltchaChallenge =
         serde_json::from_value(challenge).context("invalid ALTCHA v2 challenge")?;
@@ -838,6 +927,94 @@ pub(super) async fn solve_gpu(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn altcha_v1_digest_must_be_canonical_full_lowercase() -> anyhow::Result<()> {
+        let salt = "české-salt-12";
+        for (algorithm, digest) in [
+            (
+                "SHA-1",
+                hex::encode(sha1::Sha1::digest(format!("{salt}17").as_bytes())),
+            ),
+            (
+                "SHA-256",
+                hex::encode(Sha256::digest(format!("{salt}17").as_bytes())),
+            ),
+            (
+                "SHA-512",
+                hex::encode(Sha512::digest(format!("{salt}17").as_bytes())),
+            ),
+        ] {
+            let good = json!({"algorithm": algorithm, "challenge": digest, "maxnumber": 18, "salt": salt, "signature": "signed"});
+            assert!(parse_altcha_v1(good.clone()).is_ok());
+            let solved = solve_altcha_v1(good, Implementation::Auto)?;
+            assert_eq!(solved.answer["number"], 17);
+            for invalid in [
+                digest.to_ascii_uppercase(),
+                digest[..digest.len() - 2].to_owned(),
+                "ab!d".to_owned(),
+            ] {
+                assert!(parse_altcha_v1(json!({"algorithm": algorithm, "challenge": invalid, "salt": salt, "signature": "signed"})).is_err());
+            }
+        }
+        Ok(())
+    }
+
+    #[cfg(feature = "gpu")]
+    #[test]
+    #[ignore = "requires a physical WGPU adapter with SHADER_INT64"]
+    fn altcha_v1_sha256_sha512_gpu_full_digest_and_boundaries() -> anyhow::Result<()> {
+        use std::{
+            future::Future,
+            sync::Arc,
+            task::{Context as TaskContext, Poll, Wake, Waker},
+            time::Duration,
+        };
+        struct ThreadWake(std::thread::Thread);
+        impl Wake for ThreadWake {
+            fn wake(self: Arc<Self>) {
+                self.0.unpark();
+            }
+            fn wake_by_ref(self: &Arc<Self>) {
+                self.0.unpark();
+            }
+        }
+        fn block_on<F: Future>(future: F) -> F::Output {
+            let waker = Waker::from(Arc::new(ThreadWake(std::thread::current())));
+            let mut future = std::pin::pin!(future);
+            loop {
+                match future.as_mut().poll(&mut TaskContext::from_waker(&waker)) {
+                    Poll::Ready(value) => return value,
+                    Poll::Pending => std::thread::park_timeout(Duration::from_millis(100)),
+                }
+            }
+        }
+        let gpu = block_on(challenge_solvers::gpu::GpuContext::create())?;
+        for algorithm in ["SHA-256", "SHA-512"] {
+            for (salt, target) in [
+                ("hello-v1-Привет".to_owned(), 17u32),
+                ("z".repeat(119), 99u32),
+                ("t".repeat(1050), 1000u32),
+                (String::new(), 0u32),
+            ] {
+                let plain = format!("{salt}{target}");
+                let digest = if algorithm == "SHA-256" {
+                    hex::encode(Sha256::digest(plain.as_bytes()))
+                } else {
+                    hex::encode(Sha512::digest(plain.as_bytes()))
+                };
+                let challenge = json!({"algorithm":algorithm,"challenge":digest,"salt":salt,"maxnumber":target+1,"signature":"signed"});
+                let proof = block_on(solve_altcha_v1_gpu(&gpu, challenge))?;
+                assert_eq!(proof.answer["number"], target);
+                assert_eq!(proof.implementation, "wgpu");
+                println!(
+                    "verified ALTCHA v1 {algorithm} utf8_len={} target={target}",
+                    salt.len()
+                );
+            }
+        }
+        Ok(())
+    }
 
     #[test]
     fn altcha_argon2_reused_memory_matches_reference_for_variable_parameters() -> anyhow::Result<()>
