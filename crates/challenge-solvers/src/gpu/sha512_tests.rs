@@ -141,7 +141,7 @@ fn solve_block(
         .recv()
         .expect("map response")
         .expect("map GPU bytes");
-    let mapped = slice.get_mapped_range();
+    let mapped = slice.get_mapped_range().expect("mapped GPU SHA-512 output");
     let words: Vec<u32> = mapped
         .chunks_exact(4)
         .map(|c| u32::from_le_bytes(c.try_into().expect("word")))
