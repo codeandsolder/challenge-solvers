@@ -57,34 +57,60 @@ fn salsa20_8(input: array<u32,16>) -> array<u32,16> {
  );
 }
 
-fn blockmix(lane: u32) {
- let words_per_lane=32u*params.r;
- let base=(lane+params.offset)*words_per_lane;
- var x: array<u32,16>;
- for(var j=0u;j<16u;j++){
-  x[j]=state[base+(2u*params.r-1u)*16u+j];
+// B and Y alternate roles every BlockMix. RFC7914 requires power-of-two
+// N>=2, so both N-round phases contain an even number of swaps and the
+// public output remains in B (state), with no per-round Y->B copy.
+fn current_word(base:u32,aux_base:u32,word:u32,from_y:bool)->u32 {
+ if(from_y){return mixed[aux_base+word];}
+ return state[base+word];
+}
+fn write_next(base:u32,aux_base:u32,word:u32,from_y:bool,value:u32) {
+ if(from_y){state[base+word]=value;}
+ else{mixed[aux_base+word]=value;}
+}
+
+// Optional XOR of V into X and input is fused with BlockMix: no separate
+// read/modify/write pass over B before the Salsa20/8 transformation.
+fn blockmix(lane:u32,from_y:bool,v_base:u32,xor_v:bool) {
+ let words=32u*params.r;
+ let base=(lane+params.offset)*words;
+ let aux=lane*words;
+ var x:array<u32,16>;
+ let last=(2u*params.r-1u)*16u;
+ for(var j=0u;j<16u;j++) {
+  x[j]=current_word(base,aux,last+j,from_y);
+  if(xor_v){x[j]^=scratch[v_base+last+j];}
  }
- for(var i=0u;i<2u*params.r;i++){
-  for(var j=0u;j<16u;j++){x[j]^=state[base+i*16u+j];}
+ for(var i=0u;i<2u*params.r;i++) {
+  for(var j=0u;j<16u;j++) {
+   let pos=i*16u+j;
+   var word=current_word(base,aux,pos,from_y);
+   if(xor_v){word^=scratch[v_base+pos];}
+   x[j]^=word;
+  }
   x=salsa20_8(x);
   let destination=(i/2u)+select(0u,params.r,(i&1u)!=0u);
-  for(var j=0u;j<16u;j++){mixed[lane*words_per_lane+destination*16u+j]=x[j];}
+  for(var j=0u;j<16u;j++) {
+   write_next(base,aux,destination*16u+j,from_y,x[j]);
+  }
  }
- for(var i=0u;i<words_per_lane;i++){state[base+i]=mixed[lane*words_per_lane+i];}
 }
 
 @compute @workgroup_size(64)
 fn fill(@builtin(global_invocation_id) gid:vec3<u32>) {
  let lane=gid.x;
  if(lane>=params.lanes){return;}
- let words_per_lane=32u*params.r;
- let base=(lane+params.offset)*words_per_lane;
- for(var round=0u;round<params.n;round++){
-  let address=(lane*params.n+round)*words_per_lane;
-  for(var word=0u;word<words_per_lane;word++){
-   scratch[address+word]=state[base+word];
+ let words=32u*params.r;
+ let base=(lane+params.offset)*words;
+ let aux=lane*words;
+ var from_y=false;
+ for(var round=0u;round<params.n;round++) {
+  let address=(lane*params.n+round)*words;
+  for(var word=0u;word<words;word++) {
+   scratch[address+word]=current_word(base,aux,word,from_y);
   }
-  blockmix(lane);
+  blockmix(lane,from_y,0u,false);
+  from_y=!from_y;
  }
 }
 
@@ -92,16 +118,16 @@ fn fill(@builtin(global_invocation_id) gid:vec3<u32>) {
 fn mix(@builtin(global_invocation_id) gid:vec3<u32>) {
  let lane=gid.x;
  if(lane>=params.lanes){return;}
- let words_per_lane=32u*params.r;
- let base=(lane+params.offset)*words_per_lane;
- for(var round=0u;round<params.n;round++){
-  // Integerify: the little-endian 64-bit integer beginning at the last
-  // 64-byte chunk. N is a u32 power of two, so only its low 32 bits matter.
-  let index=state[base+(2u*params.r-1u)*16u]&(params.n-1u);
-  let address=(lane*params.n+index)*words_per_lane;
-  for(var word=0u;word<words_per_lane;word++){
-   state[base+word]^=scratch[address+word];
-  }
-  blockmix(lane);
+ let words=32u*params.r;
+ let base=(lane+params.offset)*words;
+ let aux=lane*words;
+ var from_y=false;
+ for(var round=0u;round<params.n;round++) {
+  // Integerify uses the low 32 bits of the last 64-byte chunk.
+  let last=(2u*params.r-1u)*16u;
+  let index=current_word(base,aux,last,from_y)&(params.n-1u);
+  let address=(lane*params.n+index)*words;
+  blockmix(lane,from_y,address,true);
+  from_y=!from_y;
  }
 }
