@@ -399,7 +399,24 @@ impl GpuContext {
     ///
     /// Returns an error if no requested/usable adapter is available or the device cannot be created.
     pub fn create() -> Pin<Box<dyn Future<Output = Result<Self, GpuError>>>> {
-        Box::pin(async {
+        Self::create_with_timestamp_requirement(false)
+    }
+
+    /// Create a GPU context with hardware timestamp-query support for profiling.
+    ///
+    /// This is opt-in: regular solver contexts do not request extra device features.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the selected adapter cannot provide timestamp queries.
+    pub fn create_with_timestamps() -> Pin<Box<dyn Future<Output = Result<Self, GpuError>>>> {
+        Self::create_with_timestamp_requirement(true)
+    }
+
+    fn create_with_timestamp_requirement(
+        timestamps: bool,
+    ) -> Pin<Box<dyn Future<Output = Result<Self, GpuError>>>> {
+        Box::pin(async move {
             let instance = wgpu::Instance::new(
                 wgpu::InstanceDescriptor::new_without_display_handle_from_env(),
             );
@@ -407,8 +424,19 @@ impl GpuContext {
             let info = adapter.get_info();
             let adapter_name = format!("{} ({:?}, {})", info.name, info.backend, info.driver);
             let limits = adapter.limits();
+            let required_features = if timestamps {
+                if !adapter.features().contains(wgpu::Features::TIMESTAMP_QUERY) {
+                    return Err(GpuError::new(format!(
+                        "GPU adapter {adapter_name} does not support timestamp queries"
+                    )));
+                }
+                wgpu::Features::TIMESTAMP_QUERY
+            } else {
+                wgpu::Features::empty()
+            };
             let (device, queue) = adapter
                 .request_device(&wgpu::DeviceDescriptor {
+                    required_features,
                     required_limits: wgpu::Limits::downlevel_defaults(),
                     ..wgpu::DeviceDescriptor::default()
                 })

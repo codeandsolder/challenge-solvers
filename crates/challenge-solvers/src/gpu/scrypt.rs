@@ -23,6 +23,18 @@ pub struct ScryptRomixGpu<'a> {
     mix: wgpu::ComputePipeline,
 }
 
+/// Device-side time spent in each of the two scrypt ROMix compute passes.
+/// Raw GPU timestamp deltas are kept separate from host submission latency.
+#[derive(Debug, Clone, Copy)]
+pub struct ScryptRomixTimings {
+    /// Timestamp ticks covering the fill pass.
+    pub fill_ticks: u64,
+    /// Timestamp ticks covering the mix pass.
+    pub mix_ticks: u64,
+    /// Nanoseconds per GPU tick as reported by the device queue.
+    pub timestamp_period_ns: f32,
+}
+
 impl<'a> ScryptRomixGpu<'a> {
     /// Create reusable RFC 7914 `ROMix` GPU pipelines.
     #[must_use]
@@ -122,6 +134,35 @@ impl<'a> ScryptRomixGpu<'a> {
     ///
     /// Rejects invalid sizes, and reports GPU dispatch/readback failures.
     pub async fn mix_blocks(&self, blocks: &[u8], n: u32, r: u32) -> Result<Vec<u8>, GpuError> {
+        self.mix_blocks_inner(blocks, n, r, false)
+            .await
+            .map(|(result, _)| result)
+    }
+
+    /// Run ROMix and report GPU fill/mix pass timestamps for each device-sized batch.
+    ///
+    /// Requires a context created by [`GpuContext::create_with_timestamps`].
+    /// Normal [`Self::mix_blocks`] calls do not request timestamp features.
+    ///
+    /// # Errors
+    ///
+    /// Reports invalid input, unavailable GPU timestamp queries or device failures.
+    pub async fn mix_blocks_with_timestamps(
+        &self,
+        blocks: &[u8],
+        n: u32,
+        r: u32,
+    ) -> Result<(Vec<u8>, Vec<ScryptRomixTimings>), GpuError> {
+        self.mix_blocks_inner(blocks, n, r, true).await
+    }
+
+    async fn mix_blocks_inner(
+        &self,
+        blocks: &[u8],
+        n: u32,
+        r: u32,
+        profile: bool,
+    ) -> Result<(Vec<u8>, Vec<ScryptRomixTimings>), GpuError> {
         let lanes_per_batch = self.batch_lanes(n, r)?;
         let block_bytes = usize::try_from(r)
             .ok()
@@ -133,9 +174,10 @@ impl<'a> ScryptRomixGpu<'a> {
             ));
         }
         if blocks.is_empty() {
-            return Ok(Vec::new());
+            return Ok((Vec::new(), Vec::new()));
         }
         let mut result = Vec::new();
+        let mut timings = Vec::new();
         result
             .try_reserve_exact(blocks.len())
             .map_err(|e| GpuError::new(format!("reserve scrypt output: {e}")))?;
@@ -144,10 +186,13 @@ impl<'a> ScryptRomixGpu<'a> {
             .ok_or_else(|| GpuError::new("scrypt batch chunk byte length overflow"))?;
         for batch in blocks.chunks(chunk_bytes) {
             let lane_count = batch.len() / block_bytes;
-            let gpu_chunk = self.mix_batch(batch, n, r, lane_count).await?;
+            let (gpu_chunk, timing) = self.mix_batch(batch, n, r, lane_count, profile).await?;
             result.extend_from_slice(&gpu_chunk);
+            if let Some(timing) = timing {
+                timings.push(timing);
+            }
         }
-        Ok(result)
+        Ok((result, timings))
     }
 
     async fn mix_batch(
@@ -156,7 +201,8 @@ impl<'a> ScryptRomixGpu<'a> {
         n: u32,
         r: u32,
         lanes: usize,
-    ) -> Result<Vec<u8>, GpuError> {
+        profile: bool,
+    ) -> Result<(Vec<u8>, Option<ScryptRomixTimings>), GpuError> {
         let gpu = self.gpu;
         let device = &gpu.device;
         let lanes_u32 = u32::try_from(lanes)
@@ -204,6 +250,31 @@ impl<'a> ScryptRomixGpu<'a> {
             data_bytes,
             wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
         );
+        let timestamps = if profile {
+            if !device.features().contains(wgpu::Features::TIMESTAMP_QUERY) {
+                return Err(GpuError::new(
+                    "scrypt profiling requires GPU timestamp queries",
+                ));
+            }
+            let queries = device.create_query_set(&wgpu::QuerySetDescriptor {
+                label: Some("scrypt-romix-timestamps"),
+                ty: wgpu::QueryType::Timestamp,
+                count: 4,
+            });
+            let resolved = create(
+                "scrypt-romix-timestamp-resolve",
+                32,
+                wgpu::BufferUsages::QUERY_RESOLVE | wgpu::BufferUsages::COPY_SRC,
+            );
+            let readback = create(
+                "scrypt-romix-timestamp-readback",
+                32,
+                wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            );
+            Some((queries, resolved, readback))
+        } else {
+            None
+        };
         gpu.queue.write_buffer(&data, 0, initial);
         let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("challenge-solvers-scrypt-romix-bindings"),
@@ -230,18 +301,66 @@ impl<'a> ScryptRomixGpu<'a> {
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("challenge-solvers-scrypt-romix"),
         });
-        for (label, pipeline) in [("scrypt-V-fill", &self.fill), ("scrypt-ROMix", &self.mix)] {
+        for (step, (label, pipeline)) in
+            [("scrypt-V-fill", &self.fill), ("scrypt-ROMix", &self.mix)]
+                .into_iter()
+                .enumerate()
+        {
+            let begin = if step == 0 { 0 } else { 2 };
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some(label),
-                timestamp_writes: None,
+                timestamp_writes: timestamps.as_ref().map(|(queries, _, _)| {
+                    wgpu::ComputePassTimestampWrites {
+                        query_set: queries,
+                        beginning_of_pass_write_index: Some(begin),
+                        end_of_pass_write_index: Some(begin + 1),
+                    }
+                }),
             });
             pass.set_pipeline(pipeline);
             pass.set_bind_group(0, &bind, &[]);
             pass.dispatch_workgroups(lanes_u32.div_ceil(64), 1, 1);
         }
+        if let Some((queries, resolved, readback)) = &timestamps {
+            encoder.resolve_query_set(queries, 0..4, resolved, 0);
+            encoder.copy_buffer_to_buffer(resolved, 0, readback, 0, 32);
+        }
         encoder.copy_buffer_to_buffer(&data, 0, &staging, 0, data_bytes);
         gpu.queue.submit([encoder.finish()]);
-        readback_scrypt(device, &staging).await
+        let output = readback_scrypt(device, &staging).await?;
+        let timing = if let Some((_, _, readback)) = timestamps {
+            let raw = readback_scrypt(device, &readback).await?;
+            if raw.len() != 32 {
+                return Err(GpuError::new(
+                    "scrypt timestamp readback is not four u64 values",
+                ));
+            }
+            let mut chunks = raw.chunks_exact(8);
+            let mut next_tick = || -> Result<u64, GpuError> {
+                let bytes: [u8; 8] = chunks
+                    .next()
+                    .ok_or_else(|| GpuError::new("scrypt timestamp missing"))?
+                    .try_into()
+                    .map_err(|_| GpuError::new("scrypt timestamp malformed"))?;
+                Ok(u64::from_le_bytes(bytes))
+            };
+            let (fill_start, fill_end, mix_start, mix_end) =
+                (next_tick()?, next_tick()?, next_tick()?, next_tick()?);
+            let fill_ticks = fill_end
+                .checked_sub(fill_start)
+                .ok_or_else(|| GpuError::new("scrypt fill GPU timestamps went backwards"))?;
+            let mix_ticks = mix_end
+                .checked_sub(mix_start)
+                .ok_or_else(|| GpuError::new("scrypt mix GPU timestamps went backwards"))?;
+            Some(ScryptRomixTimings {
+                fill_ticks,
+                mix_ticks,
+                timestamp_period_ns: gpu.queue.get_timestamp_period(),
+            })
+        } else {
+            None
+        };
+        Ok((output, timing))
     }
 }
 
