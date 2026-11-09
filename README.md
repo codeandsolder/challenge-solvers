@@ -80,10 +80,25 @@ WebGPU storage-buffer and dispatch limits, rather than an arbitrary N/r/p
 whitelist. Extremely memory-intensive parameters can exceed a single GPU
 storage binding, in which case the API returns an explicit device-limit error.
 
-This primitive is not yet an end-to-end ALTCHA scrypt GPU route. The reference
-tests compare complete PBKDF2/ROMix/PBKDF2 results against the independent
-RustCrypto scrypt implementation; the measured economics determine whether
-to move more of that pipeline onto the GPU.
+The existing ScryptRomixGpu primitive remains available for profiling only
+the memory-hard phase. For end-to-end derivation, ScryptKdfGpu::derive_key
+now performs both one-iteration PBKDF2-HMAC-SHA256 stages and ROMix in one
+WebGPU command sequence. The CPU prepares only the HMAC ipad/opad SHA-256
+chaining states, which are reused by all GPU output blocks. The final derived
+key is the only device-to-host transfer. Independent p lanes are batched
+under the actual requested WebGPU scratch-memory limit, and the complete
+intermediate B stays on the device even when p requires multiple batches.
+
+The SHA-256 compression shader is shared with the ALTCHA GPU code, rather
+than maintaining a second cryptographic implementation. This is a reusable
+KDF API, not yet an ALTCHA search-engine GPU route: that requires generating
+candidate HMAC states and searching many independent candidates on GPU.
+
+The standalone CPU-ROMix-GPU-CPU benchmark showed that **an optimized
+release-build CPU beat the hybrid GPU in every measured configuration** on
+an RTX 2060 Max-Q. Do not use the earlier test-profile benchmarks to claim
+a speedup. The integrated device-side KDF must be validated against
+independent RFC 7914 results and benchmarked before automatic routing.
 
 ## CI and dependency maintenance
 
