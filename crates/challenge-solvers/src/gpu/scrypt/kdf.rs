@@ -14,10 +14,10 @@ use super::{
 };
 use crate::sha256::{IV, digest_block};
 
-/// GPU scrypt, including both PBKDF2-HMAC-SHA256 stages and RFC 7914 `ROMix`.
+/// GPU scrypt, including both PBKDF2-HMAC-SHA256 stages and RFC 7914 ``ROMix``.
 ///
 /// Each scrypt p-lane is independently mixed; large p is split into
-/// GPU-memory-bounded `ROMix` batches without copying intermediate B to host.
+/// GPU-memory-bounded ``ROMix`` batches without copying intermediate B to host.
 pub struct ScryptKdfGpu<'a> {
     romix: ScryptRomixGpu<'a>,
     layout: wgpu::BindGroupLayout,
@@ -97,7 +97,7 @@ impl<'a> ScryptKdfGpu<'a> {
     /// This derives occupancy from the actual requested WebGPU storage and
     /// compute limits: B, output, candidate HMAC states, and both PBKDF2
     /// dispatches. Scratch V may be smaller than the full set of lanes
-    /// because ROMix transparently processes independent lane batches.
+    /// because `ROMix` transparently processes independent lane batches.
     ///
     /// # Errors
     ///
@@ -151,12 +151,12 @@ impl<'a> ScryptKdfGpu<'a> {
     ///
     /// CPU preparation is only 2 SHA256 HMAC ipad/opad chaining states per
     /// password, plus a single shared padded salt template. Both PBKDF2
-    /// stages and all N-step ROMix passes are run on GPU. The full B state
+    /// stages and all N-step `ROMix` passes are run on GPU. The full B state
     /// stays on GPU even when the candidate*p lanes span multiple scratch
     /// batches; only final derived keys are read back.
     ///
     /// Empty input returns an empty set of keys. Large sets are transparently
-    /// split into batches chosen by batch_candidates() to respect the device
+    /// split into batches chosen by `batch_candidates()` to respect the device
     /// storage buffer and dispatch size limits.
     ///
     /// # Errors
