@@ -11,50 +11,50 @@ struct Params {
 @group(0) @binding(2) var<storage,read_write> scratch: array<u32>;
 @group(0) @binding(3) var<storage,read_write> mixed: array<u32>;
 
-fn rotl(x: u32, shift: u32) -> u32 {
- return (x << shift) | (x >> (32u - shift));
+// Four independent Salsa20 quarter-rounds per vec4; lane permutations
+// turn the four column quarters into four row quarters without dynamic
+// indexing of a sixteen-word mutable WGSL array.
+fn rotl4(value: vec4<u32>, bits: u32) -> vec4<u32> {
+ return (value << vec4<u32>(bits)) | (value >> vec4<u32>(32u-bits));
 }
 
-// Salsa20/8 core, exactly four column+row double rounds.
+// Salsa20/8 over one 64-byte block (RFC7914), returning input + 8 rounds.
+// Each vector component is one independent quarter-round, exposing ILP to
+// the backend and eliminating dynamically indexed round-state arrays.
 fn salsa20_8(input: array<u32,16>) -> array<u32,16> {
- var x = input;
+ var a=vec4<u32>(input[0],input[5],input[10],input[15]);
+ var b=vec4<u32>(input[4],input[9],input[14],input[3]);
+ var c=vec4<u32>(input[8],input[13],input[2],input[7]);
+ var d=vec4<u32>(input[12],input[1],input[6],input[11]);
  for(var round=0u;round<4u;round++) {
-  x[ 4] ^= rotl(x[ 0]+x[12], 7u);
-  x[ 8] ^= rotl(x[ 4]+x[ 0], 9u);
-  x[12] ^= rotl(x[ 8]+x[ 4],13u);
-  x[ 0] ^= rotl(x[12]+x[ 8],18u);
-  x[ 9] ^= rotl(x[ 5]+x[ 1], 7u);
-  x[13] ^= rotl(x[ 9]+x[ 5], 9u);
-  x[ 1] ^= rotl(x[13]+x[ 9],13u);
-  x[ 5] ^= rotl(x[ 1]+x[13],18u);
-  x[14] ^= rotl(x[10]+x[ 6], 7u);
-  x[ 2] ^= rotl(x[14]+x[10], 9u);
-  x[ 6] ^= rotl(x[ 2]+x[14],13u);
-  x[10] ^= rotl(x[ 6]+x[ 2],18u);
-  x[ 3] ^= rotl(x[15]+x[11], 7u);
-  x[ 7] ^= rotl(x[ 3]+x[15], 9u);
-  x[11] ^= rotl(x[ 7]+x[ 3],13u);
-  x[15] ^= rotl(x[11]+x[ 7],18u);
+  // Column round: four parallel quarter-rounds.
+  b ^= rotl4(a+d,7u);
+  c ^= rotl4(b+a,9u);
+  d ^= rotl4(c+b,13u);
+  a ^= rotl4(d+c,18u);
 
-  x[ 1] ^= rotl(x[ 0]+x[ 3], 7u);
-  x[ 2] ^= rotl(x[ 1]+x[ 0], 9u);
-  x[ 3] ^= rotl(x[ 2]+x[ 1],13u);
-  x[ 0] ^= rotl(x[ 3]+x[ 2],18u);
-  x[ 6] ^= rotl(x[ 5]+x[ 4], 7u);
-  x[ 7] ^= rotl(x[ 6]+x[ 5], 9u);
-  x[ 4] ^= rotl(x[ 7]+x[ 6],13u);
-  x[ 5] ^= rotl(x[ 4]+x[ 7],18u);
-  x[11] ^= rotl(x[10]+x[ 9], 7u);
-  x[ 8] ^= rotl(x[11]+x[10], 9u);
-  x[ 9] ^= rotl(x[ 8]+x[11],13u);
-  x[10] ^= rotl(x[ 9]+x[ 8],18u);
-  x[12] ^= rotl(x[15]+x[14], 7u);
-  x[13] ^= rotl(x[12]+x[15], 9u);
-  x[14] ^= rotl(x[13]+x[12],13u);
-  x[15] ^= rotl(x[14]+x[13],18u);
+  // Column -> row permutation. The a-vector is unchanged.
+  var rb=d.yzwx;
+  var rc=c.zwxy;
+  var rd=b.wxyz;
+
+  // Row round: four parallel quarter-rounds.
+  rb ^= rotl4(a+rd,7u);
+  rc ^= rotl4(rb+a,9u);
+  rd ^= rotl4(rc+rb,13u);
+  a ^= rotl4(rd+rc,18u);
+
+  // Row -> column permutation, inverse to the one above.
+  b=rd.yzwx;
+  c=rc.zwxy;
+  d=rb.wxyz;
  }
- for(var i=0u;i<16u;i++){x[i]+=input[i];}
- return x;
+ return array<u32,16>(
+  a.x+input[0],d.y+input[1],c.z+input[2],b.w+input[3],
+  b.x+input[4],a.y+input[5],d.z+input[6],c.w+input[7],
+  c.x+input[8],b.y+input[9],a.z+input[10],d.w+input[11],
+  d.x+input[12],c.y+input[13],b.z+input[14],a.w+input[15]
+ );
 }
 
 fn blockmix(lane: u32) {
