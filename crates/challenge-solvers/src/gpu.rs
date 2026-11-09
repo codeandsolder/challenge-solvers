@@ -7,6 +7,9 @@ use std::{borrow::Cow, string::String, vec::Vec};
 
 use bytemuck::{Pod, Zeroable};
 
+mod altcha_sha512;
+pub use altcha_sha512::{AltchaSha64Algorithm, AltchaSha64GpuSolver, AltchaSha64Solution};
+
 mod scrypt;
 pub use scrypt::{ScryptKdfGpu, ScryptRomixGpu};
 
@@ -475,16 +478,15 @@ impl GpuContext {
             let info = adapter.get_info();
             let adapter_name = format!("{} ({:?}, {})", info.name, info.backend, info.driver);
             let limits = adapter.limits();
-            let required_features = if timestamps {
+            let mut required_features = adapter.features() & wgpu::Features::SHADER_INT64;
+            if timestamps {
                 if !adapter.features().contains(wgpu::Features::TIMESTAMP_QUERY) {
                     return Err(GpuError::new(format!(
                         "GPU adapter {adapter_name} does not support timestamp queries"
                     )));
                 }
-                wgpu::Features::TIMESTAMP_QUERY
-            } else {
-                wgpu::Features::empty()
-            };
+                required_features |= wgpu::Features::TIMESTAMP_QUERY;
+            }
             let (device, queue) = adapter
                 .request_device(&wgpu::DeviceDescriptor {
                     required_features,
