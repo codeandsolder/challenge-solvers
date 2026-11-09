@@ -192,14 +192,14 @@ fn main() {
  var state:array<u64,8>;
  var block:array<u64,16>;
  for(var i=0u;i<8u;i=i+1u){
-   state[i]=(u64(input[i*2u])<<32u)|u64(input[i*2u+1u]);
+   state[i]=(u64(input[i*2u])<<u64(32u))|u64(input[i*2u+1u]);
  }
  for(var i=0u;i<16u;i=i+1u){
-   block[i]=(u64(input[16u+i*2u])<<32u)|u64(input[17u+i*2u]);
+   block[i]=(u64(input[16u+i*2u])<<u64(32u))|u64(input[17u+i*2u]);
  }
  let digest=sha512_compress(state,block);
  for(var i=0u;i<8u;i=i+1u){
-   output[i*2u]=u32(digest[i]>>32u);
+   output[i*2u]=u32(digest[i]>>u64(32u));
    output[i*2u+1u]=u32(digest[i]);
  }
 }
