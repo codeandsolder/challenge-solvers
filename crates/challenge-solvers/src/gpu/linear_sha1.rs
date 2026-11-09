@@ -92,11 +92,8 @@ impl LinearSha1GpuSolver {
         values[1] = count;
         values[2] = u32::try_from(self.digest_offset)
             .map_err(|_| GpuError::new("invalid Linear.pub digest offset"))?;
-        for (idx, four) in self.seed.chunks_exact(4).enumerate() {
-            let data: [u8; 4] = four
-                .try_into()
-                .map_err(|_| GpuError::new("incorrect Linear.pub seed chunk"))?;
-            values[4 + idx] = u32::from_be_bytes(data);
+        for (idx, four) in self.seed.as_chunks::<4>().0.iter().enumerate() {
+            values[4 + idx] = u32::from_be_bytes(*four);
         }
         gpu.queue
             .write_buffer(params, 0, bytemuck::cast_slice(&values));
