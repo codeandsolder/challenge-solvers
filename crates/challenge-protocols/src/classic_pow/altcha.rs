@@ -14,6 +14,8 @@ use argon2::{
     Algorithm as Argon2Algorithm, Argon2, Block as Argon2Block, Params as Argon2Params,
     Version as Argon2Version,
 };
+#[cfg(feature = "gpu")]
+use challenge_solvers::gpu::{AltchaSha64Algorithm, AltchaSha64GpuSolver};
 use challenge_solvers::{AltchaSha256Solver, message::AltchaMessage, solver::SOLVE_TYPE_MASK};
 use pbkdf2::pbkdf2_hmac;
 use serde::Deserialize;
@@ -181,6 +183,9 @@ fn altcha_fast_case(challenge: &AltchaChallenge) -> Option<(AltchaMessage, u64, 
 
 #[cfg(feature = "gpu")]
 enum AltchaGpuInput {
+    /// Native 64-bit SHA-2 family, including HMAC/PBKDF2 with arbitrary
+    /// valid salt, nonce, derived length, and counter encodings.
+    Sha64(AltchaSha64GpuSolver),
     /// Prehash arbitrary-length salt/nonce data exactly once on the host.
     Sha256 {
         salt: Vec<u8>,
@@ -221,11 +226,14 @@ pub(super) fn auto_gpu_expected_work(challenge: &Value) -> Option<u128> {
     };
     let difficulty_bits = gpu_case.prefix.len().saturating_mul(4).min(counter_bits);
     let candidates = 1_u128 << difficulty_bits;
-    let (cost, pbkdf2) = match gpu_case.input {
-        AltchaGpuInput::Sha256 { cost, .. } => (cost.get(), false),
-        AltchaGpuInput::Pbkdf2Fixed(message) => (message.cost.get(), true),
-        AltchaGpuInput::Pbkdf2General { cost, .. } => (cost.get(), true),
-    };
+    // Eligibility and parameter validity come from the actual GPU parser.
+    // All supported ALTCHA v2 algorithms share the same cost parameter.
+    let cost = parsed.parameters.cost;
+    let pbkdf2 = parsed
+        .parameters
+        .algorithm
+        .to_ascii_uppercase()
+        .starts_with("PBKDF2/");
     let kdf_factor = if pbkdf2 { 2_u128 } else { 1 };
     Some(
         candidates
@@ -241,19 +249,20 @@ fn altcha_gpu_case(challenge: &AltchaChallenge) -> anyhow::Result<AltchaGpuCase>
         params.key_length > 0,
         "ALTCHA GPU key length must be positive"
     );
-    if params.algorithm == "SHA-256" {
+    let algorithm = params.algorithm.to_ascii_uppercase();
+    if algorithm == "SHA-256" {
         ensure!(
             params.key_length <= 32,
             "ALTCHA iterative SHA-256 output cannot exceed 32 bytes"
         );
-    } else if params.algorithm == "PBKDF2/SHA-256" {
+    } else if algorithm == "PBKDF2/SHA-256" {
         ensure!(
             u64::try_from(params.key_length).is_ok_and(|n| n <= u64::from(u32::MAX) * 32),
             "ALTCHA PBKDF2-SHA256 output exceeds RFC 8018"
         );
     }
     let cost = NonZeroU32::new(params.cost).context("ALTCHA GPU cost must be positive")?;
-    let input = match params.algorithm.as_str() {
+    let input = match algorithm.as_str() {
         "SHA-256" => AltchaGpuInput::Sha256 {
             salt: hex::decode(&params.salt).context("invalid ALTCHA SHA-256 salt hex")?,
             nonce: hex::decode(&params.nonce).context("invalid ALTCHA SHA-256 nonce hex")?,
@@ -268,11 +277,30 @@ fn altcha_gpu_case(challenge: &AltchaChallenge) -> anyhow::Result<AltchaGpuCase>
                 AltchaGpuInput::Pbkdf2General { salt, nonce, cost }
             }
         }
-        _ => bail!("ALTCHA GPU supports SHA-256 and PBKDF2/SHA-256 only"),
+        "SHA-384" | "SHA-512" | "PBKDF2/SHA-384" | "PBKDF2/SHA-512" => {
+            let mode = match algorithm.as_str() {
+                "SHA-384" => AltchaSha64Algorithm::Sha384,
+                "SHA-512" => AltchaSha64Algorithm::Sha512,
+                "PBKDF2/SHA-384" => AltchaSha64Algorithm::Pbkdf2Sha384,
+                "PBKDF2/SHA-512" => AltchaSha64Algorithm::Pbkdf2Sha512,
+                _ => unreachable!("validated SHA-384/512 variant"),
+            };
+            let salt = hex::decode(&params.salt).context("invalid ALTCHA SHA-384/512 salt hex")?;
+            let nonce =
+                hex::decode(&params.nonce).context("invalid ALTCHA SHA-384/512 nonce hex")?;
+            AltchaGpuInput::Sha64(AltchaSha64GpuSolver::new(
+                mode,
+                &salt,
+                &nonce,
+                cost,
+                params.key_length,
+            )?)
+        }
+        _ => bail!("ALTCHA GPU algorithm not supported: {algorithm}"),
     };
     let prefix = AltchaHexPrefix::parse(&params.key_prefix)?;
     ensure!(
-        prefix.0.len() <= params.key_length * 2,
+        prefix.0.len() <= params.key_length.saturating_mul(2),
         "ALTCHA GPU prefix exceeds the derived key length"
     );
     let mut target = 0_u64;
@@ -712,6 +740,35 @@ fn encode_words_be(words: [u32; 8]) -> String {
 }
 
 #[cfg(feature = "gpu")]
+async fn solve_sha64_gpu(
+    gpu: &challenge_solvers::gpu::GpuContext,
+    mut solver: AltchaSha64GpuSolver,
+    prefix: &[u8],
+    counter_mode: AltchaCounterMode,
+) -> anyhow::Result<Result> {
+    solver.set_prefix_nibbles(prefix)?;
+    if counter_mode == AltchaCounterMode::String {
+        solver.set_string_counter();
+    }
+    let started = Instant::now();
+    let proof = solver
+        .solve(gpu)
+        .await?
+        .context("ALTCHA SHA-384/512 GPU search exhausted configured counter domain")?;
+    let solve_ms = started.elapsed().as_secs_f64() * 1000.0;
+    Ok(Result {
+        answer: json!({
+            "counter": proof.nonce,
+            "derivedKey": hex::encode(proof.derived_key),
+            "time": solve_ms,
+            "attempted_nonces": solver.attempted_nonces(),
+        }),
+        solve_ms,
+        implementation: "wgpu".to_owned(),
+    })
+}
+
+#[cfg(feature = "gpu")]
 pub(super) async fn solve_gpu(
     gpu: &challenge_solvers::gpu::GpuContext,
     challenge: Value,
@@ -719,24 +776,33 @@ pub(super) async fn solve_gpu(
     let counter_mode = altcha_counter_mode(&challenge)?;
     let challenge: AltchaChallenge =
         serde_json::from_value(challenge).context("invalid ALTCHA v2 challenge")?;
-    let gpu_case = altcha_gpu_case(&challenge)?;
-    let mut solver = match gpu_case.input {
+    let AltchaGpuCase {
+        input,
+        prefix,
+        target,
+        mask,
+        key_length,
+    } = altcha_gpu_case(&challenge)?;
+    let mut solver = match input {
+        AltchaGpuInput::Sha64(solver) => {
+            return solve_sha64_gpu(gpu, solver, &prefix, counter_mode).await;
+        }
         AltchaGpuInput::Sha256 { salt, nonce, cost } => {
             challenge_solvers::gpu::AltchaSha256Solver::for_sha256_prefix(&salt, &nonce, cost)?
         }
         AltchaGpuInput::Pbkdf2Fixed(message) => {
             let mut solver = challenge_solvers::gpu::AltchaSha256Solver::from(message);
-            solver.set_pbkdf2_key_length(gpu_case.key_length)?;
+            solver.set_pbkdf2_key_length(key_length)?;
             solver
         }
         AltchaGpuInput::Pbkdf2General { salt, nonce, cost } => {
             let mut solver =
                 challenge_solvers::gpu::AltchaSha256Solver::for_pbkdf2(&salt, &nonce, cost)?;
-            solver.set_pbkdf2_key_length(gpu_case.key_length)?;
+            solver.set_pbkdf2_key_length(key_length)?;
             solver
         }
     };
-    solver.set_prefix_nibbles(&gpu_case.prefix)?;
+    solver.set_prefix_nibbles(&prefix)?;
     if counter_mode == AltchaCounterMode::String {
         solver.set_string_counter();
         solver.set_limit(JS_MAX_SAFE_INTEGER + 1);
@@ -745,7 +811,7 @@ pub(super) async fn solve_gpu(
     }
     let started = Instant::now();
     let solution = solver
-        .solve::<SOLVE_TYPE_MASK>(gpu, gpu_case.target, gpu_case.mask)
+        .solve::<SOLVE_TYPE_MASK>(gpu, target, mask)
         .await?
         .context("ALTCHA GPU search exhausted configured limit")?;
     let solve_ms = started.elapsed().as_secs_f64() * 1000.0;
@@ -754,7 +820,7 @@ pub(super) async fn solve_gpu(
         .context("ALTCHA GPU did not retain its independently verified derived key")?;
     let derived_key = hex::encode(
         verified_key
-            .get(..gpu_case.key_length)
+            .get(..key_length)
             .context("ALTCHA GPU returned a short verified derived key")?,
     );
     Ok(Result {
@@ -937,6 +1003,157 @@ mod tests {
                 .context("expected optimized SHA256/PBKDF2 path")?;
             assert_eq!(optimized.answer["counter"], 0);
             assert_eq!(optimized.answer["derivedKey"], hex::encode(&expected));
+        }
+        Ok(())
+    }
+
+    #[cfg(feature = "gpu")]
+    #[test]
+    fn altcha_sha64_gpu_parser_and_auto_cost_cover_all_modes() -> anyhow::Result<()> {
+        for (algorithm, width, factor) in [
+            ("SHA-384", 48, 1_u128),
+            ("SHA-512", 64, 1),
+            ("PBKDF2/SHA-384", 48, 2),
+            ("PBKDF2/SHA-512", 64, 2),
+        ] {
+            let mut request = serde_json::json!({
+                "counterMode": "uint32",
+                "parameters": {
+                    "algorithm": algorithm,
+                    "cost": 3,
+                    "keyLength": width,
+                    "keyPrefix": "aBc",
+                    "nonce": "44".repeat(155),
+                    "salt": "55".repeat(143),
+                }
+            });
+            assert_eq!(auto_gpu_expected_work(&request), Some(4096 * 3 * factor));
+            request["counterMode"] = json!("string");
+            assert_eq!(auto_gpu_expected_work(&request), Some(4096 * 3 * factor));
+            request["parameters"]["keyLength"] = json!(1);
+            assert_eq!(auto_gpu_expected_work(&request), None);
+            request["parameters"]["keyLength"] = json!(width);
+            request["parameters"]["salt"] = json!("gg");
+            assert_eq!(auto_gpu_expected_work(&request), None);
+            request["parameters"]["salt"] = json!("55".repeat(143));
+            request["parameters"]["algorithm"] = json!(algorithm.to_ascii_lowercase());
+            assert_eq!(auto_gpu_expected_work(&request), Some(4096 * 3 * factor));
+        }
+        Ok(())
+    }
+
+    #[cfg(feature = "gpu")]
+    fn make_altcha_sha64_protocol_case(
+        algorithm: &str,
+        key_length: usize,
+        cost: u32,
+        decimal: bool,
+    ) -> anyhow::Result<(Value, Vec<u8>)> {
+        let mut parameters = AltchaChallengeParameters {
+            algorithm: algorithm.to_owned(),
+            cost,
+            key_length,
+            key_prefix: String::new(),
+            memory_cost: None,
+            nonce: hex::encode(
+                (0_u16..135)
+                    .map(|i| u8::try_from((i * 13 + 7) % 256).expect("byte"))
+                    .collect::<Vec<_>>(),
+            ),
+            parallelism: None,
+            salt: hex::encode(
+                (0_u16..157)
+                    .map(|i| u8::try_from((i * 11 + 17) % 256).expect("byte"))
+                    .collect::<Vec<_>>(),
+            ),
+        };
+        let mut target: Option<(u64, Vec<u8>)> = None;
+        for variant in 0..16_u8 {
+            parameters
+                .salt
+                .replace_range(..2, &format!("{variant:02x}"));
+            let salt = hex::decode(&parameters.salt)?;
+            let nonce = hex::decode(&parameters.nonce)?;
+            let mut previous = Vec::new();
+            let mut winner = Vec::new();
+            for counter in 0..=7_u32 {
+                let mut password = nonce.clone();
+                if decimal {
+                    password.extend_from_slice(counter.to_string().as_bytes());
+                } else {
+                    password.extend_from_slice(&counter.to_be_bytes());
+                }
+                let key = altcha_derive_key(&parameters, &salt, &password)?;
+                if counter == 7 {
+                    winner = key;
+                } else {
+                    previous.push(key);
+                }
+            }
+            let prefix = &winner[..2];
+            if previous.iter().all(|key| key.get(..2) != Some(prefix)) {
+                target = Some((7, winner));
+                break;
+            }
+        }
+        let (_, reference) = target.context("unable to find independent test prefix")?;
+        parameters.key_prefix = hex::encode(&reference[..2]);
+        let challenge = json!({
+            "counterMode": if decimal {"string"} else {"uint32"},
+            "parameters": parameters
+        });
+        Ok((challenge, reference))
+    }
+
+    #[cfg(feature = "gpu")]
+    #[test]
+    #[ignore = "requires a physical GPU with native SHADER_INT64"]
+    fn altcha_sha64_gpu_protocol_roundtrip() -> anyhow::Result<()> {
+        use std::{
+            future::Future,
+            sync::Arc,
+            task::{Context as TaskContext, Poll, Wake, Waker},
+            time::Duration,
+        };
+
+        struct ThreadWake(std::thread::Thread);
+        impl Wake for ThreadWake {
+            fn wake(self: Arc<Self>) {
+                self.0.unpark();
+            }
+            fn wake_by_ref(self: &Arc<Self>) {
+                self.0.unpark();
+            }
+        }
+        fn block_on<F: Future>(future: F) -> F::Output {
+            let waker = Waker::from(Arc::new(ThreadWake(std::thread::current())));
+            let mut future = std::pin::pin!(future);
+            loop {
+                match future.as_mut().poll(&mut TaskContext::from_waker(&waker)) {
+                    Poll::Ready(result) => return result,
+                    Poll::Pending => std::thread::park_timeout(Duration::from_millis(100)),
+                }
+            }
+        }
+        let gpu = block_on(challenge_solvers::gpu::GpuContext::create())?;
+        for (algorithm, key_length, cost, decimal) in [
+            ("SHA-384", 31, 2, false),
+            ("SHA-512", 49, 3, true),
+            ("PBKDF2/SHA-384", 115, 2, false),
+            ("PBKDF2/SHA-512", 147, 2, true),
+        ] {
+            let (challenge, reference) =
+                make_altcha_sha64_protocol_case(algorithm, key_length, cost, decimal)?;
+            assert!(auto_gpu_expected_work(&challenge).is_some());
+            let result = block_on(solve_gpu(&gpu, challenge))?;
+            assert_eq!(result.answer["counter"], 7, "{algorithm} counter");
+            assert_eq!(
+                result.answer["derivedKey"],
+                hex::encode(&reference),
+                "{algorithm} key"
+            );
+            assert_eq!(result.implementation, "wgpu");
+            println!("ALTCHA protocol passed {algorithm} decimal={decimal} counter=7");
         }
         Ok(())
     }
