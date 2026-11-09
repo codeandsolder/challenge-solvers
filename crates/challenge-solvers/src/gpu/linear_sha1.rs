@@ -155,24 +155,25 @@ impl LinearSha1GpuSolver {
         &mut self,
         gpu: &GpuContext,
     ) -> Result<Option<LinearSha1Solution>, GpuError> {
-        let shader = gpu
-            .device
-            .create_shader_module(wgpu::ShaderModuleDescriptor {
-                label: Some("linear-sha1"),
-                source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(include_str!(
-                    "../shaders/linear_sha1.wgsl"
-                ))),
-            });
-        let pipeline = gpu
-            .device
-            .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                label: Some("linear-sha1"),
-                layout: None,
-                module: &shader,
-                entry_point: Some("solve"),
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-                cache: None,
-            });
+        let pipeline = gpu.linear_sha1_pipeline.get_or_init(|| {
+            let shader = gpu
+                .device
+                .create_shader_module(wgpu::ShaderModuleDescriptor {
+                    label: Some("linear-sha1"),
+                    source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(include_str!(
+                        "../shaders/linear_sha1.wgsl"
+                    ))),
+                });
+            gpu.device
+                .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                    label: Some("linear-sha1"),
+                    layout: None,
+                    module: &shader,
+                    entry_point: Some("solve"),
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                    cache: None,
+                })
+        });
         let params = gpu.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("linear-sha1-params"),
             size: 14 * 4,
@@ -189,7 +190,7 @@ impl LinearSha1GpuSolver {
         while base < limit {
             let batch = (limit - base).min(target);
             let count = gpu_u32(batch, "Linear.pub batch count")?;
-            let found = self.dispatch(gpu, &pipeline, &params, base, count).await?;
+            let found = self.dispatch(gpu, pipeline, &params, base, count).await?;
             self.attempted += batch;
             if let Some(nonce) = found {
                 return Ok(Some(LinearSha1Solution {
@@ -223,6 +224,8 @@ mod tests {
     #[ignore = "requires a physical Vulkan/WGPU adapter"]
     fn linear_sha1_gpu_all_offsets_and_counter_boundaries() -> anyhow::Result<()> {
         let gpu = super::super::sha512_tests::block_on(GpuContext::create())?;
+        assert!(gpu.linear_sha1_pipeline.get().is_none());
+        let mut original_pipeline = None;
         for offset in 0..16u8 {
             let seed = format!("{offset:X}{}", "0".repeat(39));
             let mut solver = LinearSha1GpuSolver::new(seed.as_bytes())?;
@@ -231,6 +234,18 @@ mod tests {
                 .expect("every seed should have SHA1 16-bit match within 500k candidates");
             assert!(solver.verifies(result.nonce), "digest byte offset {offset}");
             assert!(result.nonce < 500_000);
+            let current = gpu
+                .linear_sha1_pipeline
+                .get()
+                .expect("Linear WGPU pipeline must be initialized");
+            if let Some(first) = original_pipeline {
+                assert!(
+                    std::ptr::eq(first, current),
+                    "Linear GPU pipeline must persist across challenges"
+                );
+            } else {
+                original_pipeline = Some(current);
+            }
             println!(
                 "Linear.pub SHA-1 GPU offset {offset}: nonce={}",
                 result.nonce
