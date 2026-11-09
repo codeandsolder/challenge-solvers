@@ -22,7 +22,7 @@ impl Wake for ThreadWaker {
 
 fn block_on<F: Future>(future: F) -> F::Output {
     let waker = Waker::from(Arc::new(ThreadWaker(std::thread::current())));
-    let mut future = Box::pin(future);
+    let mut future = std::pin::pin!(future);
     loop {
         match future.as_mut().poll(&mut Context::from_waker(&waker)) {
             Poll::Ready(result) => return result,
