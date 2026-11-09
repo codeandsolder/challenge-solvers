@@ -61,7 +61,7 @@ struct AltchaChallenge {
     parameters: AltchaChallengeParameters,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, serde::Serialize)]
 struct AltchaChallengeParameters {
     algorithm: String,
     cost: u32,
