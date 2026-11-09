@@ -4,7 +4,7 @@ struct Params {
  n: u32,
  r: u32,
  lanes: u32,
- unused: u32,
+ offset: u32,
 };
 @group(0) @binding(0) var<uniform> params: Params;
 @group(0) @binding(1) var<storage,read_write> state: array<u32>;
@@ -59,7 +59,7 @@ fn salsa20_8(input: array<u32,16>) -> array<u32,16> {
 
 fn blockmix(lane: u32) {
  let words_per_lane=32u*params.r;
- let base=lane*words_per_lane;
+ let base=(lane+params.offset)*words_per_lane;
  var x: array<u32,16>;
  for(var j=0u;j<16u;j++){
   x[j]=state[base+(2u*params.r-1u)*16u+j];
@@ -68,9 +68,9 @@ fn blockmix(lane: u32) {
   for(var j=0u;j<16u;j++){x[j]^=state[base+i*16u+j];}
   x=salsa20_8(x);
   let destination=(i/2u)+select(0u,params.r,(i&1u)!=0u);
-  for(var j=0u;j<16u;j++){mixed[base+destination*16u+j]=x[j];}
+  for(var j=0u;j<16u;j++){mixed[lane*words_per_lane+destination*16u+j]=x[j];}
  }
- for(var i=0u;i<words_per_lane;i++){state[base+i]=mixed[base+i];}
+ for(var i=0u;i<words_per_lane;i++){state[base+i]=mixed[lane*words_per_lane+i];}
 }
 
 @compute @workgroup_size(64)
@@ -78,7 +78,7 @@ fn fill(@builtin(global_invocation_id) gid:vec3<u32>) {
  let lane=gid.x;
  if(lane>=params.lanes){return;}
  let words_per_lane=32u*params.r;
- let base=lane*words_per_lane;
+ let base=(lane+params.offset)*words_per_lane;
  for(var round=0u;round<params.n;round++){
   let address=(lane*params.n+round)*words_per_lane;
   for(var word=0u;word<words_per_lane;word++){
@@ -93,7 +93,7 @@ fn mix(@builtin(global_invocation_id) gid:vec3<u32>) {
  let lane=gid.x;
  if(lane>=params.lanes){return;}
  let words_per_lane=32u*params.r;
- let base=lane*words_per_lane;
+ let base=(lane+params.offset)*words_per_lane;
  for(var round=0u;round<params.n;round++){
   // Integerify: the little-endian 64-bit integer beginning at the last
   // 64-byte chunk. N is a u32 power of two, so only its low 32 bits matter.

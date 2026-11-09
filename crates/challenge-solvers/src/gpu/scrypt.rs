@@ -7,6 +7,9 @@
 
 use std::borrow::Cow;
 
+mod kdf;
+pub use kdf::ScryptKdfGpu;
+
 use super::{GpuContext, GpuError};
 
 /// Reusable scrypt `ROMix` pipeline, independent of proof-of-work protocols.
@@ -238,11 +241,14 @@ impl<'a> ScryptRomixGpu<'a> {
         }
         encoder.copy_buffer_to_buffer(&data, 0, &staging, 0, data_bytes);
         gpu.queue.submit([encoder.finish()]);
-        readback(device, &staging).await
+        readback_scrypt(device, &staging).await
     }
 }
 
-async fn readback(device: &wgpu::Device, staging: &wgpu::Buffer) -> Result<Vec<u8>, GpuError> {
+pub(super) async fn readback_scrypt(
+    device: &wgpu::Device,
+    staging: &wgpu::Buffer,
+) -> Result<Vec<u8>, GpuError> {
     let slice = staging.slice(..);
     let (sender, receiver) = futures_channel::oneshot::channel();
     slice.map_async(wgpu::MapMode::Read, move |result| {

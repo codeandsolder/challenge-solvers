@@ -8,7 +8,7 @@ use std::{borrow::Cow, string::String, vec::Vec};
 use bytemuck::{Pod, Zeroable};
 
 mod scrypt;
-pub use scrypt::ScryptRomixGpu;
+pub use scrypt::{ScryptKdfGpu, ScryptRomixGpu};
 
 use crate::{high_u32, low_u32};
 use sha2::{Digest, Sha256};
@@ -2324,7 +2324,7 @@ fn verify_altcha<const TYPE: u8>(
     Some(derived_key)
 }
 
-fn altcha_shader_source() -> String {
+fn sha256_core_shader_source() -> String {
     let mut rounds = String::new();
     for (t, k) in crate::sha256::K32.iter().enumerate() {
         let i = t & 15;
@@ -2350,10 +2350,15 @@ fn altcha_shader_source() -> String {
             ),
         );
     }
+    include_str!("shaders/sha256_core.wgsl").replace("__SHA256_ROUNDS__", &rounds)
+}
+
+fn altcha_shader_source() -> String {
     include_str!("shaders/altcha.wgsl")
-        .replace("__SHA256_ROUNDS__", &rounds)
+        .replace("__SHA256_CORE__", &sha256_core_shader_source())
         .replace("__WORKGROUP_SIZE__", &WG_SIZE.to_string())
 }
+
 fn cerberus_shader_source() -> String {
     const PERM: [usize; 16] = [2, 6, 3, 10, 7, 0, 4, 13, 1, 11, 12, 5, 9, 14, 15, 8];
     let mut schedule = [[0_usize; 16]; 7];
