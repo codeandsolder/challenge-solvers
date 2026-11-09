@@ -32,7 +32,7 @@ impl<'a> ScryptKdfGpu<'a> {
         Self::with_romix(gpu, ScryptRomixGpu::new(gpu))
     }
 
-    /// Construct the complete GPU KDF with a benchmark-supplied ROMix shader.
+    /// Construct the complete GPU KDF with a benchmark-supplied `ROMix` shader.
     ///
     /// The PBKDF2 pipelines and host dispatch logic are identical to
     /// production, allowing end-to-end A/B measurements on one GPU queue.
