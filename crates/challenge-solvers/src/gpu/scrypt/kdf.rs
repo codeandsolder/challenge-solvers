@@ -67,7 +67,7 @@ impl<'a> ScryptKdfGpu<'a> {
             romix: ScryptRomixGpu::new(gpu),
             layout,
             initial: create("initial"),
-            final_stage: create("final"),
+            final_stage: create("finish"),
         }
     }
 

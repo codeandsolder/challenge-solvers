@@ -72,7 +72,7 @@ fn initial(@builtin(global_invocation_id) gid:vec3<u32>) {
 // Final PBKDF2 invocation hashes all mixed B blocks and produces the
 // requested key. Each output block is independent; no host KDF work.
 @compute @workgroup_size(64)
-fn final(@builtin(global_invocation_id) gid:vec3<u32>) {
+fn finish(@builtin(global_invocation_id) gid:vec3<u32>) {
  let key_index=gid.x;
  if(key_index>=params.key_blocks){return;}
  var inner=array<u32,8>(P[0],P[1],P[2],P[3],P[4],P[5],P[6],P[7]);
