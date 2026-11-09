@@ -29,6 +29,20 @@ impl<'a> ScryptKdfGpu<'a> {
     /// Compile the complete scrypt KDF pipelines on the selected GPU.
     #[must_use]
     pub fn new(gpu: &'a GpuContext) -> Self {
+        Self::with_romix(gpu, ScryptRomixGpu::new(gpu))
+    }
+
+    /// Construct the complete GPU KDF with a benchmark-supplied ROMix shader.
+    ///
+    /// The PBKDF2 pipelines and host dispatch logic are identical to
+    /// production, allowing end-to-end A/B measurements on one GPU queue.
+    #[cfg(feature = "internals")]
+    #[must_use]
+    pub fn new_from_romix_wgsl(gpu: &'a GpuContext, source: &str) -> Self {
+        Self::with_romix(gpu, ScryptRomixGpu::new_from_wgsl(gpu, source))
+    }
+
+    fn with_romix(gpu: &'a GpuContext, romix: ScryptRomixGpu<'a>) -> Self {
         let device = &gpu.device;
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("challenge-solvers-scrypt-kdf-layout"),
@@ -64,7 +78,7 @@ impl<'a> ScryptKdfGpu<'a> {
             })
         };
         Self {
-            romix: ScryptRomixGpu::new(gpu),
+            romix,
             layout,
             initial: create("initial"),
             final_stage: create("finish"),
