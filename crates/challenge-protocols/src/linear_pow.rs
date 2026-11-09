@@ -69,7 +69,7 @@ fn parse_challenge(challenge: serde_json::Value) -> anyhow::Result<(Challenge, u
 }
 
 /// Solve a Linear.pub SHA-1 challenge using baseline WGPU, independently
-/// verifying the returned proof against RustCrypto SHA-1.
+/// verifying the returned proof against the independent SHA-1 CPU reference.
 ///
 /// # Errors
 /// Invalid JSON/seed, device dispatch errors or an exhausted search domain.
