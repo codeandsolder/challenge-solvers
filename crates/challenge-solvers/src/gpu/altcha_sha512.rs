@@ -358,27 +358,29 @@ impl AltchaSha64GpuSolver {
                 "selected GPU device has no SHADER_INT64 feature",
             ));
         }
-        let source = format!(
-            "{}\n{}",
-            include_str!("../shaders/sha512_core.wgsl"),
-            include_str!("../shaders/altcha_sha512.wgsl").replace("__WG__", &WG_SIZE.to_string())
-        );
-        let shader = gpu
-            .device
-            .create_shader_module(wgpu::ShaderModuleDescriptor {
-                label: Some("altcha-sha512"),
-                source: wgpu::ShaderSource::Wgsl(Cow::Owned(source)),
-            });
-        let pipeline = gpu
-            .device
-            .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                label: Some("altcha-sha512"),
-                layout: None,
-                module: &shader,
-                entry_point: Some("solve"),
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-                cache: None,
-            });
+        let pipeline = gpu.altcha_sha64_pipeline.get_or_init(|| {
+            let source = format!(
+                "{}\n{}",
+                include_str!("../shaders/sha512_core.wgsl"),
+                include_str!("../shaders/altcha_sha512.wgsl")
+                    .replace("__WG__", &WG_SIZE.to_string())
+            );
+            let shader = gpu
+                .device
+                .create_shader_module(wgpu::ShaderModuleDescriptor {
+                    label: Some("altcha-sha512"),
+                    source: wgpu::ShaderSource::Wgsl(Cow::Owned(source)),
+                });
+            gpu.device
+                .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                    label: Some("altcha-sha512"),
+                    layout: None,
+                    module: &shader,
+                    entry_point: Some("solve"),
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                    cache: None,
+                })
+        });
         let max_domain = if self.decimal_counter {
             1_u64 << 53
         } else {
@@ -400,7 +402,7 @@ impl AltchaSha64GpuSolver {
                 .min(max_batch)
                 .min(desired)
                 .min(u64::from(u32::MAX));
-            let found = self.dispatch_batch(gpu, &pipeline, base, batch).await?;
+            let found = self.dispatch_batch(gpu, pipeline, base, batch).await?;
             self.attempted = self.attempted.saturating_add(batch);
             if let Some(nonce) = found {
                 let derived = self.derive(nonce);
@@ -477,6 +479,7 @@ mod tests {
     #[ignore = "requires physical Vulkan GPU with SHADER_INT64"]
     fn sha384_sha512_pbkdf2_gpu_all_modes_with_reference() -> anyhow::Result<()> {
         let gpu = super::super::sha512_tests::block_on(GpuContext::create())?;
+        assert!(gpu.altcha_sha64_pipeline.get().is_none());
         assert!(
             gpu.device.features().contains(wgpu::Features::SHADER_INT64),
             "real GPU does not support SHADER_INT64"
@@ -523,6 +526,7 @@ mod tests {
             (AltchaSha64Algorithm::Pbkdf2Sha384, 0, 0, 1, 1, false, 0),
             (AltchaSha64Algorithm::Pbkdf2Sha512, 192, 0, 64, 2, false, 13),
         ];
+        let mut original_pipeline = None;
         for (algorithm, salt_len, nonce_len, key_len, cost, string_counter, counter) in cases {
             let salt = (0..salt_len)
                 .map(|i| ((i * 7 + 13) & 255) as u8)
@@ -550,6 +554,18 @@ mod tests {
             assert_eq!(proof.nonce, counter, "algorithm {algorithm:?}");
             assert_eq!(proof.derived_key, reference, "algorithm {algorithm:?}");
             assert_eq!(proof.dispatched_hashes, 1);
+            let current = gpu
+                .altcha_sha64_pipeline
+                .get()
+                .expect("ALTCHA SHA64 WGPU pipeline must be initialized");
+            if let Some(first) = original_pipeline {
+                assert!(
+                    std::ptr::eq(first, current),
+                    "SHA64 GPU pipeline must persist across modes and challenges"
+                );
+            } else {
+                original_pipeline = Some(current);
+            }
             println!(
                 "verified {algorithm:?} salt={salt_len} nonce={nonce_len} key={key_len} cost={cost} decimal={string_counter}"
             );

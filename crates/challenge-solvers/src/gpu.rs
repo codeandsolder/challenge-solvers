@@ -115,6 +115,10 @@ pub struct GpuContext {
     binary_pipeline: wgpu::ComputePipeline,
     cerberus_pipeline: wgpu::ComputePipeline,
     altcha_pipeline: wgpu::ComputePipeline,
+    // Protocol-specific shader pipelines are compiled once per logical context
+    // on first use. Unused GPU families do not increase startup overhead.
+    linear_sha1_pipeline: std::sync::OnceLock<wgpu::ComputePipeline>,
+    altcha_sha64_pipeline: std::sync::OnceLock<wgpu::ComputePipeline>,
     generic_in_buf: wgpu::Buffer,
     out_buf: wgpu::Buffer,
     staging: wgpu::Buffer,
@@ -532,6 +536,8 @@ impl GpuContext {
             binary_pipeline: pipelines.binary,
             cerberus_pipeline: pipelines.cerberus,
             altcha_pipeline: pipelines.altcha,
+            linear_sha1_pipeline: std::sync::OnceLock::new(),
+            altcha_sha64_pipeline: std::sync::OnceLock::new(),
             generic_in_buf: buffers.generic_input,
             out_buf: buffers.output,
             staging: buffers.staging,
