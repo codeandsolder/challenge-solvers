@@ -9,6 +9,8 @@ use bytemuck::{Pod, Zeroable};
 
 mod linear_sha1;
 pub use linear_sha1::{LinearSha1GpuSolver, LinearSha1Solution};
+mod sha1_decimal;
+pub use sha1_decimal::{Sha1DecimalGpuSolver, Sha1DecimalSolution};
 
 mod altcha_sha512;
 pub use altcha_sha512::{AltchaSha64Algorithm, AltchaSha64GpuSolver, AltchaSha64Solution};
@@ -118,6 +120,7 @@ pub struct GpuContext {
     // Protocol-specific shader pipelines are compiled once per logical context
     // on first use. Unused GPU families do not increase startup overhead.
     linear_sha1_pipeline: std::sync::OnceLock<wgpu::ComputePipeline>,
+    sha1_decimal_pipeline: std::sync::OnceLock<wgpu::ComputePipeline>,
     altcha_sha64_pipeline: std::sync::OnceLock<wgpu::ComputePipeline>,
     generic_in_buf: wgpu::Buffer,
     out_buf: wgpu::Buffer,
@@ -537,6 +540,7 @@ impl GpuContext {
             cerberus_pipeline: pipelines.cerberus,
             altcha_pipeline: pipelines.altcha,
             linear_sha1_pipeline: std::sync::OnceLock::new(),
+            sha1_decimal_pipeline: std::sync::OnceLock::new(),
             altcha_sha64_pipeline: std::sync::OnceLock::new(),
             generic_in_buf: buffers.generic_input,
             out_buf: buffers.output,

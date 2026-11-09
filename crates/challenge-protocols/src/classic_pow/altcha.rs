@@ -739,10 +739,30 @@ async fn solve_altcha_v1_gpu(
                 .context("ALTCHA v1 SHA-512 GPU search exhausted maxnumber")?
                 .nonce
         }
-        "SHA-1" => bail!("ALTCHA v1 SHA-1 GPU is not yet implemented"),
+        "SHA-1" => {
+            let digest: [u8; 20] = target
+                .as_slice()
+                .try_into()
+                .context("ALTCHA v1 SHA1 digest must be 20 bytes")?;
+            let mut solver = challenge_solvers::gpu::Sha1DecimalGpuSolver::new(
+                challenge.salt.as_bytes(),
+                digest,
+            )?;
+            solver.set_limit(max);
+            u64::from(
+                solver
+                    .solve(gpu)
+                    .await?
+                    .context("ALTCHA v1 SHA-1 GPU search exhausted maxnumber")?
+                    .nonce,
+            )
+        }
         _ => unreachable!("validated ALTCHA v1 digest algorithm"),
     };
     let digest = match challenge.algorithm.as_str() {
+        "SHA-1" => hex::encode(sha1::Sha1::digest(
+            format!("{}{number}", challenge.salt).as_bytes(),
+        )),
         "SHA-256" => hex::encode(Sha256::digest(
             format!("{}{number}", challenge.salt).as_bytes(),
         )),
@@ -963,7 +983,7 @@ mod tests {
     #[cfg(feature = "gpu")]
     #[test]
     #[ignore = "requires a physical WGPU adapter with SHADER_INT64"]
-    fn altcha_v1_sha256_sha512_gpu_full_digest_and_boundaries() -> anyhow::Result<()> {
+    fn altcha_v1_sha1_sha256_sha512_gpu_full_digest_and_boundaries() -> anyhow::Result<()> {
         use std::{
             future::Future,
             sync::Arc,
@@ -990,7 +1010,7 @@ mod tests {
             }
         }
         let gpu = block_on(challenge_solvers::gpu::GpuContext::create())?;
-        for algorithm in ["SHA-256", "SHA-512"] {
+        for algorithm in ["SHA-1", "SHA-256", "SHA-512"] {
             for (salt, target) in [
                 ("hello-v1-Привет".to_owned(), 17u32),
                 ("z".repeat(119), 99u32),
@@ -998,10 +1018,11 @@ mod tests {
                 (String::new(), 0u32),
             ] {
                 let plain = format!("{salt}{target}");
-                let digest = if algorithm == "SHA-256" {
-                    hex::encode(Sha256::digest(plain.as_bytes()))
-                } else {
-                    hex::encode(Sha512::digest(plain.as_bytes()))
+                let digest = match algorithm {
+                    "SHA-1" => hex::encode(sha1::Sha1::digest(plain.as_bytes())),
+                    "SHA-256" => hex::encode(Sha256::digest(plain.as_bytes())),
+                    "SHA-512" => hex::encode(Sha512::digest(plain.as_bytes())),
+                    _ => unreachable!("known SHA variant"),
                 };
                 let challenge = json!({"algorithm":algorithm,"challenge":digest,"salt":salt,"maxnumber":target+1,"signature":"signed"});
                 let proof = block_on(solve_altcha_v1_gpu(&gpu, challenge))?;
