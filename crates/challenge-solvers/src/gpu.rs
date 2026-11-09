@@ -134,10 +134,13 @@ struct GpuPipelines {
 }
 
 impl GpuPipelines {
-    fn create(device: &wgpu::Device) -> Self {
+    fn create(device: &wgpu::Device, majority_variant: bool) -> Self {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("challenge-solvers-anubis"),
-            source: wgpu::ShaderSource::Wgsl(Cow::Owned(shader_source())),
+            source: wgpu::ShaderSource::Wgsl(Cow::Owned(majority_shader_source(
+                shader_source(),
+                majority_variant,
+            ))),
         });
         let anubis = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: Some("challenge-solvers-anubis"),
@@ -150,7 +153,10 @@ impl GpuPipelines {
 
         let generic_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("challenge-solvers-sha256-single-block"),
-            source: wgpu::ShaderSource::Wgsl(Cow::Owned(generic_single_block_shader_source())),
+            source: wgpu::ShaderSource::Wgsl(Cow::Owned(majority_shader_source(
+                generic_single_block_shader_source(),
+                majority_variant,
+            ))),
         });
         let generic = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: Some("challenge-solvers-sha256-single-block"),
@@ -163,7 +169,10 @@ impl GpuPipelines {
 
         let multi_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("challenge-solvers-sha256-multi-layout"),
-            source: wgpu::ShaderSource::Wgsl(Cow::Owned(multi_layout_shader_source())),
+            source: wgpu::ShaderSource::Wgsl(Cow::Owned(majority_shader_source(
+                multi_layout_shader_source(),
+                majority_variant,
+            ))),
         });
         let create_multi = |label, mode| {
             let constants = [("MODE", mode)];
@@ -185,7 +194,10 @@ impl GpuPipelines {
 
         let cerberus_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("challenge-solvers-cerberus"),
-            source: wgpu::ShaderSource::Wgsl(Cow::Owned(cerberus_shader_source())),
+            source: wgpu::ShaderSource::Wgsl(Cow::Owned(majority_shader_source(
+                cerberus_shader_source(),
+                majority_variant,
+            ))),
         });
         let cerberus = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: Some("challenge-solvers-cerberus"),
@@ -198,7 +210,10 @@ impl GpuPipelines {
 
         let altcha_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("challenge-solvers-altcha"),
-            source: wgpu::ShaderSource::Wgsl(Cow::Owned(altcha_shader_source())),
+            source: wgpu::ShaderSource::Wgsl(Cow::Owned(majority_shader_source(
+                altcha_shader_source(),
+                majority_variant,
+            ))),
         });
         let altcha = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: Some("challenge-solvers-altcha"),
@@ -218,6 +233,17 @@ impl GpuPipelines {
             cerberus,
             altcha,
         }
+    }
+}
+
+/// Select an algebraically equivalent SHA-256 majority expression while
+/// preserving all other generated WGSL, including counter formatting and
+/// protocol comparisons. This is only used by opt-in GPU experiments.
+fn majority_shader_source(source: String, alternative: bool) -> String {
+    if alternative {
+        source.replace("((a&b)^(a&c)^(b&c))", "((a&b)|(c&(a|b)))")
+    } else {
+        source
     }
 }
 
@@ -413,6 +439,31 @@ impl GpuContext {
         Self::create_with_timestamp_requirement(true)
     }
 
+    /// Recompile all SHA-256 pipelines with an algebraically equivalent
+    /// majority formula on the same GPU device and queue.
+    /// Shared buffers are used sequentially, as with normal GPU solves.
+    ///
+    /// Production kernels and routing remain unchanged.
+    #[cfg(feature = "internals")]
+    #[must_use]
+    pub fn with_alternative_majority(&self) -> Self {
+        let pipelines = GpuPipelines::create(&self.device, true);
+        let buffers = GpuBuffers {
+            anubis_input: self.in_buf.clone(),
+            generic_input: self.generic_in_buf.clone(),
+            output: self.out_buf.clone(),
+            staging: self.staging.clone(),
+        };
+        Self::from_resources(
+            self.device.clone(),
+            self.queue.clone(),
+            pipelines,
+            buffers,
+            self.max_wgs,
+            self.adapter.clone(),
+        )
+    }
+
     fn create_with_timestamp_requirement(
         timestamps: bool,
     ) -> Pin<Box<dyn Future<Output = Result<Self, GpuError>>>> {
@@ -443,35 +494,52 @@ impl GpuContext {
                 .await
                 .map_err(|e| GpuError::new(format!("request GPU device: {e}")))?;
 
-            let pipelines = GpuPipelines::create(&device);
+            let pipelines = GpuPipelines::create(&device, false);
             let buffers = GpuBuffers::create(&device);
-            let bindings = GpuBindings::create(&device, &pipelines, &buffers);
-
-            Ok(Self {
+            Ok(Self::from_resources(
                 device,
                 queue,
-                pipeline: pipelines.anubis,
-                in_buf: buffers.anubis_input,
-                generic_pipeline: pipelines.generic,
-                double_pipeline: pipelines.double,
-                goaway_pipeline: pipelines.goaway,
-                binary_pipeline: pipelines.binary,
-                cerberus_pipeline: pipelines.cerberus,
-                altcha_pipeline: pipelines.altcha,
-                generic_in_buf: buffers.generic_input,
-                out_buf: buffers.output,
-                staging: buffers.staging,
-                bind_group: bindings.anubis,
-                generic_bind_group: bindings.generic,
-                double_bind_group: bindings.double,
-                goaway_bind_group: bindings.goaway,
-                binary_bind_group: bindings.binary,
-                cerberus_bind_group: bindings.cerberus,
-                altcha_bind_group: bindings.altcha,
-                max_wgs: limits.max_compute_workgroups_per_dimension,
-                adapter: adapter_name,
-            })
+                pipelines,
+                buffers,
+                limits.max_compute_workgroups_per_dimension,
+                adapter_name,
+            ))
         })
+    }
+
+    fn from_resources(
+        device: wgpu::Device,
+        queue: wgpu::Queue,
+        pipelines: GpuPipelines,
+        buffers: GpuBuffers,
+        max_wgs: u32,
+        adapter: String,
+    ) -> Self {
+        let bindings = GpuBindings::create(&device, &pipelines, &buffers);
+        Self {
+            device,
+            queue,
+            pipeline: pipelines.anubis,
+            in_buf: buffers.anubis_input,
+            generic_pipeline: pipelines.generic,
+            double_pipeline: pipelines.double,
+            goaway_pipeline: pipelines.goaway,
+            binary_pipeline: pipelines.binary,
+            cerberus_pipeline: pipelines.cerberus,
+            altcha_pipeline: pipelines.altcha,
+            generic_in_buf: buffers.generic_input,
+            out_buf: buffers.output,
+            staging: buffers.staging,
+            bind_group: bindings.anubis,
+            generic_bind_group: bindings.generic,
+            double_bind_group: bindings.double,
+            goaway_bind_group: bindings.goaway,
+            binary_bind_group: bindings.binary,
+            cerberus_bind_group: bindings.cerberus,
+            altcha_bind_group: bindings.altcha,
+            max_wgs,
+            adapter,
+        }
     }
 
     /// Submit a small representative batch to force lazy browser/driver shader setup.
