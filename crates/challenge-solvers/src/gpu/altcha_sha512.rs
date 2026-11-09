@@ -44,25 +44,25 @@ impl AltchaSha64Algorithm {
     const fn initial_state(self) -> [u64; 8] {
         if self.sha512() {
             [
-                0x6a09e667_f3bcc908,
-                0xbb67ae85_84caa73b,
-                0x3c6ef372_fe94f82b,
-                0xa54ff53a_5f1d36f1,
-                0x510e527f_ade682d1,
-                0x9b05688c_2b3e6c1f,
-                0x1f83d9ab_fb41bd6b,
-                0x5be0cd19_137e2179,
+                0x6a09_e667_f3bc_c908,
+                0xbb67_ae85_84ca_a73b,
+                0x3c6e_f372_fe94_f82b,
+                0xa54f_f53a_5f1d_36f1,
+                0x510e_527f_ade6_82d1,
+                0x9b05_688c_2b3e_6c1f,
+                0x1f83_d9ab_fb41_bd6b,
+                0x5be0_cd19_137e_2179,
             ]
         } else {
             [
-                0xcbbb9d5d_c1059ed8,
-                0x629a292a_367cd507,
-                0x9159015a_3070dd17,
-                0x152fecd8_f70e5939,
-                0x67332667_ffc00b31,
-                0x8eb44a87_68581511,
-                0xdb0c2e0d_64f98fa7,
-                0x47b5481d_befa4fa4,
+                0xcbbb_9d5d_c105_9ed8,
+                0x629a_292a_367c_d507,
+                0x9159_015a_3070_dd17,
+                0x152f_ecd8_f70e_5939,
+                0x6733_2667_ffc0_0b31,
+                0x8eb4_4a87_6858_1511,
+                0xdb0c_2e0d_64f9_8fa7,
+                0x47b5_481d_befa_4fa4,
             ]
         }
     }
@@ -327,7 +327,7 @@ impl AltchaSha64GpuSolver {
                 label: Some("altcha-sha512-pass"),
                 timestamp_writes: None,
             });
-            pass.set_pipeline(&pipeline);
+            pass.set_pipeline(pipeline);
             pass.set_bind_group(0, &bind, &[]);
             pass.dispatch_workgroups(count.div_ceil(WG_SIZE), 1, 1);
         }
