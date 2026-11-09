@@ -628,6 +628,16 @@ impl GpuContext {
     pub fn adapter(&self) -> &str {
         &self.adapter
     }
+    /// Features actually enabled on this GPU device, for selecting optional
+    /// acceleration kernels and reporting accurate adapter capabilities.
+    ///
+    /// This is the negotiated device feature set, not an adapter-wide claim:
+    /// callers must check it before selecting kernels that require additional
+    /// features such as native 64-bit shader integers.
+    #[must_use]
+    pub fn features(&self) -> wgpu::Features {
+        self.device.features()
+    }
 
     /// Solve an Anubis SHA-256 challenge.
     ///
