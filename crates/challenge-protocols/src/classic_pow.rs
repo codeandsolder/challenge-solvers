@@ -80,6 +80,7 @@ pub fn solve(
 pub fn auto_gpu_expected_work(kind: &str, challenge: &Value) -> Option<u128> {
     match kind {
         "altcha" => altcha::auto_gpu_expected_work(challenge),
+        "linear" => crate::linear_pow::auto_gpu_expected_work(challenge),
         _ => None,
     }
 }

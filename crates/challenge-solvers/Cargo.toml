@@ -16,6 +16,7 @@ crate-type = ["rlib"]
 [dependencies]
 cfg-if = "1.0"
 sha2 = { version = "0.11", default-features = false }
+sha1 = { version = "0.11", default-features = false, optional = true }
 pbkdf2 = { version = "0.13", features = ["hmac"] }
 blake3 = { version = "1.8", default-features = false }
 serde = { version = "1", features = ["derive"], optional = true }
@@ -54,7 +55,7 @@ mcaptcha = ["protocol"]
 all-challenges = ["altcha", "anubis", "capjs", "cerberus", "goaway", "mcaptcha"]
 rayon = ["std", "dep:rayon", "capjs"]
 
-gpu = ["std", "compare-64bit", "dep:wgpu", "dep:bytemuck", "dep:futures-channel"]
+gpu = ["std", "compare-64bit", "dep:wgpu", "dep:bytemuck", "dep:futures-channel", "dep:sha1"]
 
 [lints]
 workspace = true

@@ -24,24 +24,11 @@ pub fn solve(
     challenge: serde_json::Value,
     implementation: Implementation,
 ) -> anyhow::Result<Result> {
-    let challenge: Challenge =
-        serde_json::from_value(challenge).context("invalid Linear.pub challenge")?;
-    ensure!(
-        challenge.seed.len() == 40 && challenge.seed.as_bytes().iter().all(u8::is_ascii_hexdigit),
-        "Linear.pub seed must be exactly 40 ASCII hex characters"
-    );
+    let (challenge, offset) = parse_challenge(challenge)?;
     ensure!(
         matches!(implementation, Implementation::Auto),
-        "Linear.pub uses RustCrypto SHA-1 and exposes only the auto implementation"
+        "Linear.pub CPU uses RustCrypto SHA-1 and exposes only the auto implementation"
     );
-    let offset = challenge
-        .seed
-        .as_bytes()
-        .first()
-        .and_then(|byte| (*byte as char).to_digit(16))
-        .and_then(|value| usize::try_from(value).ok())
-        .context("Linear.pub seed must begin with a hex digit")?;
-    ensure!(offset + 1 < 20, "Linear.pub digest offset is out of range");
 
     let started = Instant::now();
     let (nonce, attempted_nonces) =
@@ -61,6 +48,67 @@ pub fn solve(
         solve_ms,
         implementation: "auto".to_owned(),
     })
+}
+
+fn parse_challenge(challenge: serde_json::Value) -> anyhow::Result<(Challenge, usize)> {
+    let challenge: Challenge =
+        serde_json::from_value(challenge).context("invalid Linear.pub challenge")?;
+    ensure!(
+        challenge.seed.len() == 40 && challenge.seed.as_bytes().iter().all(u8::is_ascii_hexdigit),
+        "Linear.pub seed must be exactly 40 ASCII hex characters"
+    );
+    let offset = challenge
+        .seed
+        .as_bytes()
+        .first()
+        .and_then(|byte| (*byte as char).to_digit(16))
+        .and_then(|value| usize::try_from(value).ok())
+        .context("Linear.pub seed must begin with a hex digit")?;
+    ensure!(offset + 1 < 20, "Linear.pub digest offset is out of range");
+    Ok((challenge, offset))
+}
+
+/// Solve a Linear.pub SHA-1 challenge using baseline WGPU, independently
+/// verifying the returned proof against the independent SHA-1 CPU reference.
+///
+/// # Errors
+/// Invalid JSON/seed, device dispatch errors or an exhausted search domain.
+#[cfg(feature = "gpu")]
+pub async fn solve_gpu(
+    gpu: &challenge_solvers::gpu::GpuContext,
+    challenge: serde_json::Value,
+) -> anyhow::Result<Result> {
+    let (challenge, _) = parse_challenge(challenge)?;
+    let mut solver = challenge_solvers::gpu::LinearSha1GpuSolver::new(challenge.seed.as_bytes())?;
+    solver.set_limit(DEFAULT_LIMIT);
+    let started = Instant::now();
+    let proof = solver
+        .solve(gpu)
+        .await?
+        .context("Linear.pub GPU search exhausted configured limit")?;
+    let solve_ms = started.elapsed().as_secs_f64() * 1000.0;
+    let cookie_value = format!("{}{}", challenge.seed, proof.nonce);
+    Ok(Result {
+        answer: json!({
+            "nonce": proof.nonce,
+            "cookie_name": "yX3",
+            "cookie_value": cookie_value,
+            "cookie": format!("yX3={cookie_value}"),
+            "attempted_nonces": solver.attempted_nonces(),
+        }),
+        solve_ms,
+        implementation: "wgpu".to_owned(),
+    })
+}
+
+/// Estimated search effort for a valid Linear.pub SHA-1 GPU candidate.
+/// Two exact adjacent digest bytes yield 16 bits of expected work.
+#[cfg(feature = "gpu")]
+#[must_use]
+pub fn auto_gpu_expected_work(challenge: &serde_json::Value) -> Option<u128> {
+    parse_challenge(challenge.clone())
+        .ok()
+        .map(|_| 1_u128 << 16)
 }
 
 fn solve_rustcrypto(seed: &[u8], offset: usize, limit: u64) -> Option<(u64, u64)> {
@@ -164,6 +212,67 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[cfg(feature = "gpu")]
+    #[test]
+    fn linear_gpu_eligibility_is_shared_with_cpu_parser() {
+        assert_eq!(
+            auto_gpu_expected_work(&json!({"seed": LIVE_SEED})),
+            Some(1_u128 << 16)
+        );
+        assert_eq!(auto_gpu_expected_work(&json!({"seed": "bad"})), None);
+        assert_eq!(
+            auto_gpu_expected_work(&json!({
+                "seed": "G2BBE3B063367AB2F323D46D2ADA8A8A29BB5B58"
+            })),
+            None
+        );
+    }
+
+    #[cfg(feature = "gpu")]
+    #[test]
+    #[ignore = "requires a physical WGPU adapter"]
+    fn linear_gpu_full_protocol_cookie_roundtrip() -> anyhow::Result<()> {
+        use std::{
+            future::Future,
+            sync::Arc,
+            task::{Context as TaskContext, Poll, Wake, Waker},
+            time::Duration,
+        };
+
+        struct ThreadWake(std::thread::Thread);
+        impl Wake for ThreadWake {
+            fn wake(self: Arc<Self>) {
+                self.0.unpark();
+            }
+            fn wake_by_ref(self: &Arc<Self>) {
+                self.0.unpark();
+            }
+        }
+        fn block_on<F: Future>(future: F) -> F::Output {
+            let waker = Waker::from(Arc::new(ThreadWake(std::thread::current())));
+            let mut future = std::pin::pin!(future);
+            loop {
+                match future.as_mut().poll(&mut TaskContext::from_waker(&waker)) {
+                    Poll::Ready(value) => return value,
+                    Poll::Pending => std::thread::park_timeout(Duration::from_millis(100)),
+                }
+            }
+        }
+
+        let gpu = block_on(challenge_solvers::gpu::GpuContext::create())?;
+        let proof = block_on(solve_gpu(&gpu, json!({"seed": LIVE_SEED})))?;
+        let nonce = proof.answer["nonce"]
+            .as_u64()
+            .context("Linear GPU proof returned noninteger counter")?;
+        let digest = Sha1::digest(format!("{LIVE_SEED}{nonce}").as_bytes());
+        assert_eq!(&digest[7..9], &[0xb0, 0x0b]);
+        assert_eq!(proof.answer["cookie_name"], "yX3");
+        assert_eq!(proof.answer["cookie_value"], format!("{LIVE_SEED}{nonce}"));
+        assert_eq!(proof.answer["cookie"], format!("yX3={LIVE_SEED}{nonce}"));
+        assert_eq!(proof.implementation, "wgpu");
+        Ok(())
     }
 
     #[test]
