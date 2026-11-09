@@ -82,8 +82,15 @@ storage binding, in which case the API returns an explicit device-limit error.
 
 The existing ScryptRomixGpu primitive remains available for profiling only
 the memory-hard phase. For end-to-end derivation, ScryptKdfGpu::derive_key
-now performs both one-iteration PBKDF2-HMAC-SHA256 stages and ROMix in one
-WebGPU command sequence. The CPU prepares only the HMAC ipad/opad SHA-256
+performs both one-iteration PBKDF2-HMAC-SHA256 stages and ROMix in one
+WebGPU command sequence. ScryptKdfGpu::derive_keys additionally processes
+any number of **independent candidate passwords** sharing the same salt,
+N, r, p, and derived-key length. Their initial and final PBKDF2 blocks
+run concurrently in GPU workgroups, as do the combined candidate*p ROMix
+lanes. Only HMAC SHA256 ipad/opad compression states are precomputed once
+per candidate on CPU. Multiple candidates share one padded salt template.
+The candidate batch size is derived from actual device storage and dispatch
+limits and the API transparently splits oversized workloads into batches. The CPU prepares only the HMAC ipad/opad SHA-256
 chaining states, which are reused by all GPU output blocks. The final derived
 key is the only device-to-host transfer. Independent p lanes are batched
 under the actual requested WebGPU scratch-memory limit, and the complete

@@ -71,16 +71,12 @@ impl<'a> ScryptKdfGpu<'a> {
         }
     }
 
-    /// Run both one-iteration PBKDF2-HMAC-SHA256 stages and RFC 7914 `ROMix`
-    /// entirely on GPU. Returns the requested derived-key bytes.
-    ///
-    /// The host prepares candidate-independent ipad/opad SHA chaining states
-    /// but performs no PBKDF2 iterations or intermediate B readback.
+    /// Execute one complete RFC 7914 scrypt KDF on GPU, with no intermediate
+    /// device readback.
     ///
     /// # Errors
     ///
-    /// Reports invalid RFC 7914 parameters, lengths exceeding actual
-    /// requested device storage limits, or GPU dispatch failures.
+    /// Propagates invalid parameters or GPU dispatch/readback failures.
     pub async fn derive_key(
         &self,
         password: &[u8],
@@ -90,8 +86,128 @@ impl<'a> ScryptKdfGpu<'a> {
         p: u32,
         key_length: usize,
     ) -> Result<Vec<u8>, GpuError> {
-        let spec = KdfSpec::new(&self.romix, salt.len(), n, r, p, key_length)?;
-        let key_input = kdf_input(password, salt)?;
+        self.derive_keys(&[password], salt, n, r, p, key_length)
+            .await?
+            .pop()
+            .ok_or_else(|| GpuError::new("scrypt single-key GPU output missing"))
+    }
+
+    /// Maximum passwords per GPU dispatch for given RFC 7914 parameters.
+    ///
+    /// This derives occupancy from the actual requested WebGPU storage and
+    /// compute limits: B, output, candidate HMAC states, and both PBKDF2
+    /// dispatches. Scratch V may be smaller than the full set of lanes
+    /// because ROMix transparently processes independent lane batches.
+    ///
+    /// # Errors
+    ///
+    /// Rejects parameters that cannot fit even one candidate on the device.
+    pub fn batch_candidates(
+        &self,
+        salt_length: usize,
+        n: u32,
+        r: u32,
+        p: u32,
+        key_length: usize,
+    ) -> Result<usize, GpuError> {
+        let spec = KdfSpec::new(&self.romix, salt_length, n, r, p, 1, key_length)?;
+        let limits = self.romix.gpu.device.limits();
+        let storage = limits
+            .max_storage_buffer_binding_size
+            .min(limits.max_buffer_size);
+        let salt_template_bytes = salt_length
+            .checked_add(13)
+            .and_then(|n| n.div_ceil(64).checked_mul(64))
+            .and_then(|n| u64::try_from(n).ok())
+            .ok_or_else(|| GpuError::new("scrypt padded salt exceeds host byte range"))?;
+        if salt_template_bytes >= storage {
+            return Err(GpuError::new(
+                "scrypt padded salt leaves no storage for candidate HMAC states",
+            ));
+        }
+        let dispatch_capacity = u64::from(self.romix.gpu.max_wgs)
+            .checked_mul(64)
+            .ok_or_else(|| GpuError::new("scrypt GPU dispatch limit overflow"))?;
+        let max = [
+            storage / spec.b_bytes,
+            storage / spec.key_bytes,
+            (storage - salt_template_bytes) / 64,
+            dispatch_capacity / (spec.b_bytes / 32),
+            dispatch_capacity / (spec.key_bytes / 32),
+            u64::from(u32::MAX),
+        ]
+        .into_iter()
+        .min()
+        .unwrap_or(0);
+        usize::try_from(max)
+            .ok()
+            .filter(|&value| value > 0)
+            .ok_or_else(|| GpuError::new("scrypt candidate memory or dispatch exceeds this GPU"))
+    }
+
+    /// Derive independent RFC 7914 scrypt keys for any batch of passwords
+    /// sharing salt, N, r, p and key length. Independent passwords execute
+    /// in one submission per automatically sized GPU resource batch.
+    ///
+    /// CPU preparation is only 2 SHA256 HMAC ipad/opad chaining states per
+    /// password, plus a single shared padded salt template. Both PBKDF2
+    /// stages and all N-step ROMix passes are run on GPU. The full B state
+    /// stays on GPU even when the candidate*p lanes span multiple scratch
+    /// batches; only final derived keys are read back.
+    ///
+    /// Empty input returns an empty set of keys. Large sets are transparently
+    /// split into batches chosen by batch_candidates() to respect the device
+    /// storage buffer and dispatch size limits.
+    ///
+    /// # Errors
+    ///
+    /// Reports invalid RFC7914 parameters, device storage/dispatch limits,
+    /// and GPU execution or readback errors.
+    pub async fn derive_keys(
+        &self,
+        passwords: &[&[u8]],
+        salt: &[u8],
+        n: u32,
+        r: u32,
+        p: u32,
+        key_length: usize,
+    ) -> Result<Vec<Vec<u8>>, GpuError> {
+        if passwords.is_empty() {
+            return Ok(Vec::new());
+        }
+        let batch = self.batch_candidates(salt.len(), n, r, p, key_length)?;
+        let mut result = Vec::new();
+        result
+            .try_reserve_exact(passwords.len())
+            .map_err(|error| GpuError::new(format!("allocate candidate result set: {error}")))?;
+        for chunk in passwords.chunks(batch) {
+            result.extend(self.derive_batch(chunk, salt, n, r, p, key_length).await?);
+        }
+        Ok(result)
+    }
+
+    async fn derive_batch(
+        &self,
+        passwords: &[&[u8]],
+        salt: &[u8],
+        n: u32,
+        r: u32,
+        p: u32,
+        key_length: usize,
+    ) -> Result<Vec<Vec<u8>>, GpuError> {
+        if passwords.is_empty() {
+            return Ok(Vec::new());
+        }
+        let spec = KdfSpec::new(
+            &self.romix,
+            salt.len(),
+            n,
+            r,
+            p,
+            passwords.len(),
+            key_length,
+        )?;
+        let key_input = kdf_input(passwords, salt)?;
         let gpu = self.romix.gpu;
         let device = &gpu.device;
         let buffers = KdfBuffers::new(gpu, &spec, &key_input)?;
@@ -118,7 +234,7 @@ impl<'a> ScryptKdfGpu<'a> {
             ],
         });
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("challenge-solvers-scrypt-kdf-end-to-end"),
+            label: Some("challenge-solvers-scrypt-kdf-batched-passwords"),
         });
         {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
@@ -142,16 +258,23 @@ impl<'a> ScryptKdfGpu<'a> {
         encoder.copy_buffer_to_buffer(&buffers.result, 0, &buffers.staging, 0, spec.key_bytes);
         gpu.queue.submit([encoder.finish()]);
         let data = readback_scrypt(device, &buffers.staging).await?;
-        let mut result = Vec::new();
-        result
-            .try_reserve_exact(spec.key_length)
-            .map_err(|error| GpuError::new(format!("allocate derived key: {error}")))?;
-        for word in data.as_chunks::<4>().0 {
-            let native = u32::from_le_bytes([word[0], word[1], word[2], word[3]]);
-            result.extend_from_slice(&native.to_be_bytes());
+        let candidate_bytes = usize::try_from(spec.key_bytes / u64::from(spec.candidates))
+            .map_err(|_| GpuError::new("scrypt per-candidate output bytes overflow"))?;
+        let mut results = Vec::new();
+        results
+            .try_reserve_exact(passwords.len())
+            .map_err(|error| GpuError::new(format!("allocate scrypt keys: {error}")))?;
+        for candidate in data.chunks_exact(candidate_bytes) {
+            let mut key = Vec::new();
+            key.try_reserve_exact(spec.key_length)
+                .map_err(|error| GpuError::new(format!("allocate scrypt key: {error}")))?;
+            for word in candidate.as_chunks::<4>().0 {
+                key.extend_from_slice(&u32::from_le_bytes(*word).to_be_bytes());
+            }
+            key.truncate(spec.key_length);
+            results.push(key);
         }
-        result.truncate(spec.key_length);
-        Ok(result)
+        Ok(results)
     }
 
     fn encode_romix(
@@ -175,8 +298,8 @@ impl<'a> ScryptKdfGpu<'a> {
             wgpu::BufferUsages::STORAGE,
         );
         let mut offset = 0_u32;
-        while offset < spec.p {
-            let lanes = spec.lanes_per_batch.min(spec.p - offset);
+        while offset < spec.total_lanes {
+            let lanes = spec.lanes_per_batch.min(spec.total_lanes - offset);
             let uniform = allocate(
                 device,
                 "challenge-solvers-scrypt-kdf-romix-params",
@@ -258,6 +381,8 @@ struct KdfSpec {
     n: u32,
     r: u32,
     p: u32,
+    candidates: u32,
+    total_lanes: u32,
     key_length: usize,
     key_bytes: u64,
     b_bytes: u64,
@@ -276,9 +401,10 @@ impl KdfSpec {
         n: u32,
         r: u32,
         p: u32,
+        candidate_count: usize,
         key_length: usize,
     ) -> Result<Self, GpuError> {
-        if p == 0 || u64::from(r) * u64::from(p) >= 0x4000_0000 {
+        if p == 0 || r == 0 || u64::from(r) * u64::from(p) >= 0x4000_0000 {
             return Err(GpuError::new("scrypt p*r must be nonzero and below 2^30"));
         }
         let lanes_limit = romix.batch_lanes(n, r)?;
@@ -290,12 +416,24 @@ impl KdfSpec {
         }
         let salt_len = u32::try_from(salt_length)
             .map_err(|_| GpuError::new("scrypt salt too large for u32 GPU indexing"))?;
-        let b_bytes = u64::from(r) * u64::from(p) * 128;
-        let b_words = b_bytes / 4;
+        let candidates = u32::try_from(candidate_count)
+            .map_err(|_| GpuError::new("scrypt candidate count exceeds GPU u32 range"))?;
+        if candidates == 0 {
+            return Err(GpuError::new("scrypt candidate count must be positive"));
+        }
+        let total_lanes = u64::from(candidates)
+            .checked_mul(u64::from(p))
+            .and_then(|lanes| u32::try_from(lanes).ok())
+            .ok_or_else(|| GpuError::new("scrypt total p*passwords lanes exceed GPU range"))?;
+        let b_bytes = u64::from(total_lanes)
+            .checked_mul(u64::from(r))
+            .and_then(|lanes| lanes.checked_mul(128))
+            .ok_or_else(|| GpuError::new("scrypt B buffer length overflow"))?;
         let key_blocks = key_length.div_ceil(32);
         let key_bytes = u64::try_from(key_blocks)
             .ok()
             .and_then(|blocks| blocks.checked_mul(32))
+            .and_then(|bytes| bytes.checked_mul(u64::from(candidates)))
             .ok_or_else(|| GpuError::new("scrypt key buffer overflow"))?;
         let limits = gpu.device.limits();
         let storage = limits
@@ -306,24 +444,37 @@ impl KdfSpec {
                 "scrypt B or key output exceeds device storage binding limit",
             ));
         }
-        let initial_blocks = b_words / 8;
-        let initial_workgroups = u32::try_from(initial_blocks.div_ceil(64))
+        let initial_workgroups = u32::try_from((b_bytes / 32).div_ceil(64))
             .map_err(|_| GpuError::new("scrypt initial dispatch overflow"))?;
-        let final_workgroups = u32::try_from(key_blocks.div_ceil(64))
+        let final_blocks = u64::try_from(key_blocks)
+            .ok()
+            .and_then(|n| n.checked_mul(u64::from(candidates)))
+            .ok_or_else(|| GpuError::new("scrypt final digest blocks overflow"))?;
+        let final_workgroups = u32::try_from(final_blocks.div_ceil(64))
             .map_err(|_| GpuError::new("scrypt final dispatch overflow"))?;
         if initial_workgroups > gpu.max_wgs || final_workgroups > gpu.max_wgs {
             return Err(GpuError::new("scrypt PBKDF2 exceeds device dispatch limit"));
         }
         let lanes_per_batch = u32::try_from(
-            lanes_limit.min(usize::try_from(p).map_err(|_| GpuError::new("scrypt p conversion"))?),
+            lanes_limit.min(
+                usize::try_from(total_lanes)
+                    .map_err(|_| GpuError::new("scrypt total lanes exceed host usize"))?,
+            ),
         )
         .map_err(|_| GpuError::new("scrypt batch lanes exceed u32"))?;
-        let temporary_bytes = u64::from(lanes_per_batch) * u64::from(r) * 128;
-        let scratch_bytes = temporary_bytes * u64::from(n);
+        let temporary_bytes = u64::from(lanes_per_batch)
+            .checked_mul(u64::from(r))
+            .and_then(|v| v.checked_mul(128))
+            .ok_or_else(|| GpuError::new("scrypt temporary buffer overflow"))?;
+        let scratch_bytes = temporary_bytes
+            .checked_mul(u64::from(n))
+            .ok_or_else(|| GpuError::new("scrypt ROMix scratch buffer overflow"))?;
         Ok(Self {
             n,
             r,
             p,
+            candidates,
+            total_lanes,
             key_length,
             key_bytes,
             b_bytes,
@@ -355,7 +506,16 @@ impl KdfBuffers {
         if input_bytes > storage {
             return Err(GpuError::new("scrypt salt input exceeds GPU binding limit"));
         }
-        let salt_blocks = u32::try_from((input.len() - 16) / 16)
+        let key_words = usize::try_from(spec.candidates)
+            .ok()
+            .and_then(|n| n.checked_mul(16))
+            .ok_or_else(|| GpuError::new("scrypt candidate HMAC state count overflow"))?;
+        let salt_words = input
+            .len()
+            .checked_sub(key_words)
+            .filter(|n| n.is_multiple_of(16))
+            .ok_or_else(|| GpuError::new("scrypt malformed shared salt template"))?;
+        let salt_blocks = u32::try_from(salt_words / 16)
             .map_err(|_| GpuError::new("scrypt padded salt block count overflow"))?;
         let params = [
             spec.n,
@@ -363,11 +523,11 @@ impl KdfBuffers {
             spec.p,
             spec.salt_len,
             salt_blocks,
-            u32::try_from(spec.key_bytes / 32)
-                .map_err(|_| GpuError::new("scrypt key blocks overflow"))?,
-            u32::try_from(spec.b_bytes / 4)
-                .map_err(|_| GpuError::new("scrypt B words overflow"))?,
-            0_u32,
+            u32::try_from(spec.key_bytes / u64::from(spec.candidates) / 32)
+                .map_err(|_| GpuError::new("scrypt per-candidate key blocks overflow"))?,
+            u32::try_from(spec.b_bytes / u64::from(spec.candidates) / 4)
+                .map_err(|_| GpuError::new("scrypt per-candidate B words overflow"))?,
+            spec.candidates,
         ];
         let device = &gpu.device;
         let config = allocate(
@@ -411,16 +571,7 @@ impl KdfBuffers {
     }
 }
 
-fn kdf_input(password: &[u8], salt: &[u8]) -> Result<Vec<u32>, GpuError> {
-    let key: Vec<u8> = if password.len() > 64 {
-        Sha256::digest(password).to_vec()
-    } else {
-        password.to_vec()
-    };
-    let mut padded_key = [0_u8; 64];
-    padded_key[..key.len()].copy_from_slice(&key);
-    let ipad = hmac_state(&padded_key, 0x36);
-    let opad = hmac_state(&padded_key, 0x5c);
+fn kdf_input(passwords: &[&[u8]], salt: &[u8]) -> Result<Vec<u32>, GpuError> {
     let count = salt
         .len()
         .checked_add(4)
@@ -434,6 +585,26 @@ fn kdf_input(password: &[u8], salt: &[u8]) -> Result<Vec<u32>, GpuError> {
         .and_then(|n| n.checked_add(64))
         .and_then(|n| n.checked_mul(8))
         .ok_or_else(|| GpuError::new("scrypt SHA256 message length overflow"))?;
+    let words_needed = passwords
+        .len()
+        .checked_mul(16)
+        .and_then(|n| n.checked_add(padded / 4))
+        .ok_or_else(|| GpuError::new("scrypt HMAC chaining states buffer overflow"))?;
+    let mut words = Vec::new();
+    words
+        .try_reserve_exact(words_needed)
+        .map_err(|error| GpuError::new(format!("allocate HMAC states: {error}")))?;
+    for password in passwords {
+        let key: Vec<u8> = if password.len() > 64 {
+            Sha256::digest(password).to_vec()
+        } else {
+            password.to_vec()
+        };
+        let mut padded_key = [0_u8; 64];
+        padded_key[..key.len()].copy_from_slice(&key);
+        words.extend_from_slice(&hmac_state(&padded_key, 0x36));
+        words.extend_from_slice(&hmac_state(&padded_key, 0x5c));
+    }
     let mut bytes = Vec::new();
     bytes
         .try_reserve_exact(padded)
@@ -443,11 +614,8 @@ fn kdf_input(password: &[u8], salt: &[u8]) -> Result<Vec<u32>, GpuError> {
     bytes[salt.len() + 3] = 1;
     bytes[count] = 0x80;
     bytes[padded - 8..].copy_from_slice(&bit_len.to_be_bytes());
-    let mut words = Vec::with_capacity(16 + padded / 4);
-    words.extend_from_slice(&ipad);
-    words.extend_from_slice(&opad);
     for chunk in bytes.as_chunks::<4>().0 {
-        words.push(u32::from_be_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]));
+        words.push(u32::from_be_bytes(*chunk));
     }
     Ok(words)
 }
