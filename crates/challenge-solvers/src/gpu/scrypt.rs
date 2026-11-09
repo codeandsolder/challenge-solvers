@@ -373,7 +373,7 @@ impl RomixTimestampCapture {
         })
     }
 
-    fn writes(&self, first: u32) -> wgpu::ComputePassTimestampWrites<'_> {
+    const fn writes(&self, first: u32) -> wgpu::ComputePassTimestampWrites<'_> {
         wgpu::ComputePassTimestampWrites {
             query_set: &self.queries,
             beginning_of_pass_write_index: Some(first),
