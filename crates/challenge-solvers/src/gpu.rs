@@ -2902,6 +2902,9 @@ fn solve(@builtin(global_invocation_id) gid:vec3<u32>){{
 }
 
 #[cfg(test)]
+mod sha512_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
