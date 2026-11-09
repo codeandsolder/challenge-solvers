@@ -44,25 +44,25 @@ impl AltchaSha64Algorithm {
     const fn initial_state(self) -> [u64; 8] {
         if self.sha512() {
             [
-                0x6a09e667f3bcc908,
-                0xbb67ae8584caa73b,
-                0x3c6ef372fe94f82b,
-                0xa54ff53a5f1d36f1,
-                0x510e527fade682d1,
-                0x9b05688c2b3e6c1f,
-                0x1f83d9abfb41bd6b,
-                0x5be0cd19137e2179,
+                0x6a09e667_f3bcc908,
+                0xbb67ae85_84caa73b,
+                0x3c6ef372_fe94f82b,
+                0xa54ff53a_5f1d36f1,
+                0x510e527f_ade682d1,
+                0x9b05688c_2b3e6c1f,
+                0x1f83d9ab_fb41bd6b,
+                0x5be0cd19_137e2179,
             ]
         } else {
             [
-                0xcbbb9d5dc1059ed8,
-                0x629a292a367cd507,
-                0x9159015a3070dd17,
-                0x152fecd8f70e5939,
-                0x67332667ffc00b31,
-                0x8eb44a8768581511,
-                0xdb0c2e0d64f98fa7,
-                0x47b5481dbefa4fa4,
+                0xcbbb9d5d_c1059ed8,
+                0x629a292a_367cd507,
+                0x9159015a_3070dd17,
+                0x152fecd8_f70e5939,
+                0x67332667_ffc00b31,
+                0x8eb44a87_68581511,
+                0xdb0c2e0d_64f98fa7,
+                0x47b5481d_befa4fa4,
             ]
         }
     }
@@ -73,7 +73,7 @@ impl AltchaSha64Algorithm {
 pub struct AltchaSha64Solution {
     /// Found candidate nonce (u32 counter or JavaScript-safe decimal).
     pub nonce: u64,
-    /// Full derived key, independently recomputed by RustCrypto.
+    /// Full derived key, independently recomputed by `RustCrypto`.
     pub derived_key: Vec<u8>,
     /// Upper bound on GPU candidate invocations across dispatched batches.
     pub dispatched_hashes: u64,
@@ -182,7 +182,8 @@ impl AltchaSha64GpuSolver {
         if self.decimal_counter {
             value.extend_from_slice(counter.to_string().as_bytes());
         } else {
-            value.extend_from_slice(&(counter as u32).to_be_bytes());
+            let encoded = counter.to_be_bytes();
+            value.extend_from_slice(&encoded[4..]);
         }
         value
     }
@@ -274,11 +275,80 @@ impl AltchaSha64GpuSolver {
         Ok(p)
     }
 
+    async fn dispatch_batch(
+        &self,
+        gpu: &GpuContext,
+        pipeline: &wgpu::ComputePipeline,
+        base: u64,
+        batch: u64,
+    ) -> Result<Option<u64>, GpuError> {
+        let count = gpu_u32(batch, "SHA512 batch size")?;
+        let params = self.params(base, count)?;
+        let bytes = u64::try_from(params.len())
+            .ok()
+            .and_then(|n| n.checked_mul(4))
+            .ok_or_else(|| GpuError::new("SHA512 GPU input buffer overflow"))?;
+        let limits = gpu.device.limits();
+        if bytes > limits.max_storage_buffer_binding_size || bytes > limits.max_buffer_size {
+            return Err(GpuError::new(
+                "ALTCHA SHA512 input exceeds GPU storage limits",
+            ));
+        }
+        let input = gpu.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("altcha-sha512-params"),
+            size: bytes,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        gpu.queue
+            .write_buffer(&input, 0, bytemuck::cast_slice(&params));
+        gpu.queue.write_buffer(&gpu.out_buf, 0, &[0u8; 16]);
+        let bind = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("altcha-sha512-bind"),
+            layout: &pipeline.get_bind_group_layout(0),
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: input.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: gpu.out_buf.as_entire_binding(),
+                },
+            ],
+        });
+        let mut encoder = gpu
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("altcha-sha512-encoder"),
+            });
+        {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("altcha-sha512-pass"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&pipeline);
+            pass.set_bind_group(0, &bind, &[]);
+            pass.dispatch_workgroups(count.div_ceil(WG_SIZE), 1, 1);
+        }
+        encoder.copy_buffer_to_buffer(&gpu.out_buf, 0, &gpu.staging, 0, 16);
+        gpu.queue.submit([encoder.finish()]);
+        let result = gpu.read_result().await?;
+        if result[0] == 0 {
+            return Ok(None);
+        }
+        let nonce = (u64::from(result[2]) << 32) | u64::from(result[1]);
+        if nonce < base || nonce >= base + batch {
+            return Err(GpuError::new("GPU SHA512 returned out-of-batch nonce"));
+        }
+        Ok(Some(nonce))
+    }
+
     /// Run the complete GPU candidate search with independent CPU proof check.
     ///
     /// # Errors
     /// Returns an error if native shader-int64 is unsupported, the GPU fails,
-    /// or the winning nonce fails the full RustCrypto derived-key oracle.
+    /// or the winning nonce fails the full `RustCrypto` derived-key oracle.
     pub async fn solve(
         &mut self,
         gpu: &GpuContext,
@@ -330,64 +400,9 @@ impl AltchaSha64GpuSolver {
                 .min(max_batch)
                 .min(desired)
                 .min(u64::from(u32::MAX));
-            let count = gpu_u32(batch, "SHA512 batch size")?;
-            let params = self.params(base, count)?;
-            let bytes = u64::try_from(params.len())
-                .ok()
-                .and_then(|n| n.checked_mul(4))
-                .ok_or_else(|| GpuError::new("SHA512 GPU input buffer overflow"))?;
-            let limits = gpu.device.limits();
-            if bytes > limits.max_storage_buffer_binding_size || bytes > limits.max_buffer_size {
-                return Err(GpuError::new(
-                    "ALTCHA SHA512 input exceeds GPU storage limits",
-                ));
-            }
-            let input = gpu.device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("altcha-sha512-params"),
-                size: bytes,
-                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            });
-            gpu.queue
-                .write_buffer(&input, 0, bytemuck::cast_slice(&params));
-            gpu.queue.write_buffer(&gpu.out_buf, 0, &[0u8; 16]);
-            let bind = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("altcha-sha512-bind"),
-                layout: &pipeline.get_bind_group_layout(0),
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: input.as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: gpu.out_buf.as_entire_binding(),
-                    },
-                ],
-            });
-            let mut encoder = gpu
-                .device
-                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                    label: Some("altcha-sha512-encoder"),
-                });
-            {
-                let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                    label: Some("altcha-sha512-pass"),
-                    timestamp_writes: None,
-                });
-                pass.set_pipeline(&pipeline);
-                pass.set_bind_group(0, &bind, &[]);
-                pass.dispatch_workgroups(count.div_ceil(WG_SIZE), 1, 1);
-            }
-            encoder.copy_buffer_to_buffer(&gpu.out_buf, 0, &gpu.staging, 0, 16);
-            gpu.queue.submit([encoder.finish()]);
-            let result = gpu.read_result().await?;
+            let found = self.dispatch_batch(gpu, &pipeline, base, batch).await?;
             self.attempted = self.attempted.saturating_add(batch);
-            if result[0] != 0 {
-                let nonce = (u64::from(result[2]) << 32) | u64::from(result[1]);
-                if nonce < base || nonce >= base + batch {
-                    return Err(GpuError::new("GPU SHA512 returned out-of-batch nonce"));
-                }
+            if let Some(nonce) = found {
                 let derived = self.derive(nonce);
                 if !self.prefix_matches(&derived) {
                     return Err(GpuError::new(
