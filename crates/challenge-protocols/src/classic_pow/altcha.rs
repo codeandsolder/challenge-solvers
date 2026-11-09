@@ -1145,15 +1145,48 @@ mod tests {
             let (challenge, reference) =
                 make_altcha_sha64_protocol_case(algorithm, key_length, cost, decimal)?;
             assert!(auto_gpu_expected_work(&challenge).is_some());
+            // The target at counter 7 is known valid, but many independent
+            // GPU threads can find a different matching nonce in the same
+            // dispatch. Any independently verified proof is correct.
+            let parsed: AltchaChallenge = serde_json::from_value(challenge.clone())?;
+            let salt = hex::decode(&parsed.parameters.salt)?;
+            let nonce_prefix = hex::decode(&parsed.parameters.nonce)?;
+            let mut known_password = nonce_prefix.clone();
+            if decimal {
+                known_password.extend_from_slice(b"7");
+            } else {
+                known_password.extend_from_slice(&7_u32.to_be_bytes());
+            }
+            assert_eq!(
+                reference,
+                altcha_derive_key(&parsed.parameters, &salt, &known_password)?
+            );
             let result = block_on(solve_gpu(&gpu, challenge))?;
-            assert_eq!(result.answer["counter"], 7, "{algorithm} counter");
+            let counter = result.answer["counter"]
+                .as_u64()
+                .context("GPU ALTCHA answer must contain a numeric counter")?;
+            assert!(
+                counter >= 7,
+                "earlier candidates were excluded from this challenge"
+            );
+            let mut password = nonce_prefix;
+            if decimal {
+                password.extend_from_slice(counter.to_string().as_bytes());
+            } else {
+                password.extend_from_slice(&u32::try_from(counter)?.to_be_bytes());
+            }
+            let derived = altcha_derive_key(&parsed.parameters, &salt, &password)?;
             assert_eq!(
                 result.answer["derivedKey"],
-                hex::encode(&reference),
-                "{algorithm} key"
+                hex::encode(&derived),
+                "{algorithm} derived key for returned nonce"
+            );
+            assert!(
+                AltchaHexPrefix::parse(&parsed.parameters.key_prefix)?.matches(&derived),
+                "{algorithm} returned proof must match challenge prefix"
             );
             assert_eq!(result.implementation, "wgpu");
-            println!("ALTCHA protocol passed {algorithm} decimal={decimal} counter=7");
+            println!("ALTCHA protocol passed {algorithm} decimal={decimal} counter={counter}");
         }
         Ok(())
     }
