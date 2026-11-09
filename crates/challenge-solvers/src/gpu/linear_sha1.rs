@@ -160,8 +160,10 @@ impl LinearSha1GpuSolver {
                 .device
                 .create_shader_module(wgpu::ShaderModuleDescriptor {
                     label: Some("linear-sha1"),
-                    source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(include_str!(
-                        "../shaders/linear_sha1.wgsl"
+                    source: wgpu::ShaderSource::Wgsl(Cow::Owned(format!(
+                        "{}\n{}",
+                        include_str!("../shaders/sha1_core.wgsl"),
+                        include_str!("../shaders/linear_sha1.wgsl")
                     ))),
                 });
             gpu.device
