@@ -54,7 +54,9 @@ impl<'a> ScryptRomixGpu<'a> {
         });
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("challenge-solvers-scrypt-romix-shader"),
-            source: wgpu::ShaderSource::Wgsl(Cow::Owned(scrypt_romix_shader_source())),
+            source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(include_str!(
+                "../shaders/scrypt_romix.wgsl"
+            ))),
         });
         let create = |entry: &str| {
             device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
@@ -267,71 +269,4 @@ pub(super) async fn readback_scrypt(
     drop(mapped);
     staging.unmap();
     Ok(output)
-}
-
-// Expand the *single* BlockMix WGSL definition into fixed-direction,
-// scratch-free fill and scratch-XOR mix variants. All N/r/p values share
-// this same implementation; only storage addressing is specialized.
-fn scrypt_romix_shader_source() -> String {
-    let template = include_str!("../shaders/scrypt_romix_blockmix.wgsl");
-    let mut methods = String::new();
-    for (name, src, src_base, dst, dst_base, xor) in [
-        (
-            "blockmix_state_to_mixed_fill",
-            "state",
-            "base",
-            "mixed",
-            "aux",
-            false,
-        ),
-        (
-            "blockmix_mixed_to_state_fill",
-            "mixed",
-            "aux",
-            "state",
-            "base",
-            false,
-        ),
-        (
-            "blockmix_state_to_mixed_mix",
-            "state",
-            "base",
-            "mixed",
-            "aux",
-            true,
-        ),
-        (
-            "blockmix_mixed_to_state_mix",
-            "mixed",
-            "aux",
-            "state",
-            "base",
-            true,
-        ),
-    ] {
-        let function = template
-            .replace("__NAME__", name)
-            .replace("__SRC__", src)
-            .replace("__SRC_BASE__", src_base)
-            .replace("__DEST__", dst)
-            .replace("__DEST_BASE__", dst_base)
-            .replace(
-                "__XOR_INITIAL__",
-                if xor {
-                    "x[j]^=scratch[v_base+last+j];"
-                } else {
-                    ""
-                },
-            )
-            .replace(
-                "__XOR_WORD__",
-                if xor {
-                    "word^=scratch[v_base+pos];"
-                } else {
-                    ""
-                },
-            );
-        methods.push_str(&function);
-    }
-    include_str!("../shaders/scrypt_romix.wgsl").replace("__BLOCKMIX_VARIANTS__", &methods)
 }
