@@ -1,14 +1,8 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": [
-    "config:recommended",
-    "helpers:pinGitHubActionDigests",
-    "github>codeandsolder/ci-workflows:renovate-ci-trust-root"
+    "github>codeandsolder/ci-workflows:renovate-fleet"
   ],
-  "dependencyDashboard": true,
-  "minimumReleaseAge": "3 days",
-  "minimumReleaseAgeBehaviour": "timestamp-required",
-  "internalChecksFilter": "strict",
   "separateMultipleMajor": true,
   "prConcurrentLimit": 4,
   "prHourlyLimit": 4,
@@ -20,14 +14,6 @@
         "cargo"
       ],
       "matchCurrentVersion": "/^0\\./",
-      "automerge": false
-    },
-    {
-      "description": "Major and replacement updates require review",
-      "matchUpdateTypes": [
-        "major",
-        "replacement"
-      ],
       "automerge": false
     }
   ]
