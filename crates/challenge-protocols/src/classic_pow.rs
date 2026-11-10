@@ -567,7 +567,7 @@ mod tests {
     }
 
     #[test]
-    fn memory_hard_requirements_match_actual_rustcrypto_arenas() -> anyhow::Result<()> {
+    fn memory_hard_requirements_match_actual_reused_arenas() -> anyhow::Result<()> {
         use base64::Engine as _;
 
         let sequentialread = json!({
@@ -578,7 +578,7 @@ mod tests {
             json!(base64::engine::general_purpose::STANDARD.encode(sequentialread.to_string()));
         let bytes = memory_hard_requirement("pow-bot-deterrent", &encoded)
             .context("sequentialread profile absent")??;
-        assert_eq!(bytes, 128 * (16 + 1 + 1) + 16);
+        assert_eq!(bytes, 128 * (16 + 1 + 2) + 16);
         assert!(memory_hard_requirement("goaway", &encoded).is_none());
 
         let parameters = json!({
