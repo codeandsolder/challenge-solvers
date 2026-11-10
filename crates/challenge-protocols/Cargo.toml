@@ -14,6 +14,8 @@ gpu = ["challenge-solvers/gpu", "challenge-solvers/compare-64bit"]
 anyhow = "1"
 base64 = "0.22"
 blake2 = { version = "0.11", default-features = false }
+equix = "0.8"
+getrandom = "0.3"
 num-traits = "0.2"
 argon2 = { path = "../../vendor/argon2-fast" }
 anubis-argon2 = { path = "../anubis-argon2" }

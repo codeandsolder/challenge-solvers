@@ -10,8 +10,8 @@ cryptographic search machinery extracted from
   engines, per-protocol message encoders and verifier utilities, and optimized
   CPU/GPU backends for ALTCHA, Anubis, Cap.js, Cerberus, go-away and mCaptcha.
 - [challenge-protocols](crates/challenge-protocols) — reusable Anubis (classic and WASM),
-  ALTCHA, Cap.js, Cerberus, go-away, haphash, mCaptcha and Linear.pub challenge
-  parsing, solve/verify, backend selection and protocol response construction.
+  ALTCHA, Cap.js, Cerberus, Friendly Captcha v1, go-away, haphash, mCaptcha,
+  Linear.pub and Tor onion-service v1 Equi-X challenge parsing, solve/verify, backend selection and protocol response construction.
 - [challenge-hashx](crates/challenge-hashx) — standalone HashX challenge verification, native JIT and optional Vulkan/SM75 CUDA backends (without the HTTP service).
 - [anubis-argon2](crates/anubis-argon2) — specialized Anubis Argon2id
   computation and tests.
@@ -55,7 +55,8 @@ workspace, including CPU-only configurations. Disabling optional GPU support or
 protocol adapters does not disable the SIMD implementation.
 
 The challenge-protocols package also provides `classic_pow::solve` for ALTCHA,
-Cap.js, Cerberus, go-away, haphash, mCaptcha, and Linear.pub, plus Anubis WASM
+Cap.js, Cerberus, Friendly Captcha v1, go-away, haphash, mCaptcha, Linear.pub
+and Tor onion-service v1 Equi-X, plus Anubis WASM
 SHA-256 and Argon2id. Protocol parsing, proof encoding and verification remain
 inside the crate; HTTP dispatch, routing and telemetry do not.
 
