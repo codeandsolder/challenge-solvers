@@ -19,11 +19,14 @@ use serde_json::{Value, json};
 mod altcha;
 mod capjs;
 mod friendly;
+mod sequentialread;
 mod tor_equix;
 /// CPU worker recommendation for independent Friendly Captcha solution banks.
 pub use friendly::suggested_workers as friendlycaptcha_suggested_workers;
 /// Verify the computational proof of a Friendly Captcha v1 puzzle.
 pub use friendly::verify as verify_friendlycaptcha_v1;
+/// Independently verify a sequentialread Scrypt `PoW` proof against its challenge.
+pub use sequentialread::verify as verify_pow_bot_deterrent;
 /// Verify a Tor onion-service v1 proof extension against its descriptor inputs.
 pub use tor_equix::verify as verify_tor_hs_v1;
 #[cfg(feature = "gpu")]
@@ -72,6 +75,7 @@ pub fn solve(
         "capjs" => capjs::solve(challenge, implementation),
         "friendlycaptcha" => friendly::solve(challenge, implementation, worker_count),
         "tor-hs-v1" => tor_equix::solve(challenge, implementation, worker_count),
+        "pow-bot-deterrent" => sequentialread::solve(&challenge, implementation, worker_count),
         "mcaptcha" => solve_mcaptcha(challenge, implementation),
         "haphash" => solve_haphash(challenge, implementation),
         "altcha" => altcha::solve(challenge, implementation, worker_count),
