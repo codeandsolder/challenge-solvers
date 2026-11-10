@@ -45,6 +45,19 @@ fn g<const A: usize, const B: usize, const C: usize, const D: usize>(
     v[B] = (v[B] ^ v[C]).rotate_right(63);
 }
 
+#[inline]
+fn round<const R: usize>(v: &mut [u64; 16], words: &[u64; 16]) {
+    let s = SIGMA[R];
+    g::<0, 4, 8, 12>(v, words[s[0]], words[s[1]]);
+    g::<1, 5, 9, 13>(v, words[s[2]], words[s[3]]);
+    g::<2, 6, 10, 14>(v, words[s[4]], words[s[5]]);
+    g::<3, 7, 11, 15>(v, words[s[6]], words[s[7]]);
+    g::<0, 5, 10, 15>(v, words[s[8]], words[s[9]]);
+    g::<1, 6, 11, 12>(v, words[s[10]], words[s[11]]);
+    g::<2, 7, 8, 13>(v, words[s[12]], words[s[13]]);
+    g::<3, 4, 9, 14>(v, words[s[14]], words[s[15]]);
+}
+
 #[derive(Clone)]
 pub(super) struct SingleBlock {
     words: [u64; 16],
@@ -73,17 +86,18 @@ impl SingleBlock {
 
         let mut words = self.words;
         words[15] = nonce;
-        for round in 0..12 {
-            let s = SIGMA[round % 10];
-            g::<0, 4, 8, 12>(&mut v, words[s[0]], words[s[1]]);
-            g::<1, 5, 9, 13>(&mut v, words[s[2]], words[s[3]]);
-            g::<2, 6, 10, 14>(&mut v, words[s[4]], words[s[5]]);
-            g::<3, 7, 11, 15>(&mut v, words[s[6]], words[s[7]]);
-            g::<0, 5, 10, 15>(&mut v, words[s[8]], words[s[9]]);
-            g::<1, 6, 11, 12>(&mut v, words[s[10]], words[s[11]]);
-            g::<2, 7, 8, 13>(&mut v, words[s[12]], words[s[13]]);
-            g::<3, 4, 9, 14>(&mut v, words[s[14]], words[s[15]]);
-        }
+        round::<0>(&mut v, &words);
+        round::<1>(&mut v, &words);
+        round::<2>(&mut v, &words);
+        round::<3>(&mut v, &words);
+        round::<4>(&mut v, &words);
+        round::<5>(&mut v, &words);
+        round::<6>(&mut v, &words);
+        round::<7>(&mut v, &words);
+        round::<8>(&mut v, &words);
+        round::<9>(&mut v, &words);
+        round::<0>(&mut v, &words);
+        round::<1>(&mut v, &words);
         let word = IV[0] ^ 0x0101_0020 ^ v[0] ^ v[8];
         let bytes = word.to_le_bytes();
         u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]])
