@@ -6,7 +6,7 @@ codegen-units = 1
 opt-level = 3
 
 [workspace]
-members = ["crates/challenge-solvers", "crates/anubis-argon2", "crates/challenge-protocols", "crates/challenge-hashx"]
+members = ["crates/challenge-solvers", "crates/anubis-argon2", "crates/challenge-protocols", "crates/challenge-hashx", "crates/scrypt-fast"]
 resolver = "3"
 exclude = ["vendor/argon2-fast"]
 
