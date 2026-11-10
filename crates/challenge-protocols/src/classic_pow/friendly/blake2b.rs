@@ -1,9 +1,9 @@
 //! Dedicated 128-byte BLAKE2b-256 compression for Friendly Captcha v1.
 //!
-//! Every v1 candidate is exactly one full BLAKE2b block; the only changing
+//! Every v1 candidate is exactly one full `BLAKE2b` block; the only changing
 //! message word is the final 64-bit nonce.  We retain the decoded fixed words
 //! and evaluate only digest word zero, which contains the complete 32-bit
-//! leading-word predicate.  The RustCrypto implementation remains the oracle.
+//! leading-word predicate.  The `RustCrypto` implementation remains the oracle.
 
 const IV: [u64; 8] = [
     0x6a09_e667_f3bc_c908,
@@ -29,7 +29,7 @@ const SIGMA: [[usize; 16]; 10] = [
     [10, 2, 8, 4, 7, 6, 1, 5, 15, 11, 9, 14, 3, 12, 13, 0],
 ];
 
-#[inline(always)]
+#[inline]
 fn g<const A: usize, const B: usize, const C: usize, const D: usize>(
     v: &mut [u64; 16],
     x: u64,
@@ -84,7 +84,9 @@ impl SingleBlock {
             g::<2, 7, 8, 13>(&mut v, words[s[12]], words[s[13]]);
             g::<3, 4, 9, 14>(&mut v, words[s[14]], words[s[15]]);
         }
-        (IV[0] ^ 0x0101_0020 ^ v[0] ^ v[8]) as u32
+        let word = IV[0] ^ 0x0101_0020 ^ v[0] ^ v[8];
+        let bytes = word.to_le_bytes();
+        u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]])
     }
 }
 
@@ -95,12 +97,12 @@ mod tests {
 
     #[test]
     fn one_block_matches_rustcrypto_for_all_nonce_positions_and_inputs() {
-        for seed in 0..16_u64 {
+        for seed in 0..16_u8 {
             let mut padded = [0_u8; 128];
             for (i, byte) in padded.iter_mut().enumerate() {
                 *byte = seed
                     .wrapping_mul(17)
-                    .wrapping_add(u64::try_from(i).unwrap_or(0)) as u8;
+                    .wrapping_add(u8::try_from(i).unwrap_or(0));
             }
             let block = SingleBlock::new(&padded);
             for nonce in [
@@ -108,9 +110,9 @@ mod tests {
                 1,
                 u64::MAX,
                 0x0123_4567_89ab_cdef,
-                seed,
-                0xdead_beef_0000_0000 | seed,
-                0x8000_0000_0000_0000 | seed,
+                u64::from(seed),
+                0xdead_beef_0000_0000 | u64::from(seed),
+                0x8000_0000_0000_0000 | u64::from(seed),
             ] {
                 padded[120..128].copy_from_slice(&nonce.to_le_bytes());
                 let digest = Blake2b256::digest(padded);
