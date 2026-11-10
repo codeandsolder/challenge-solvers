@@ -181,7 +181,8 @@ pub fn suggested_workers(challenge: &Value, configured: usize) -> anyhow::Result
 
 fn derive(parsed: &Parsed, nonce: &[u8]) -> anyhow::Result<Vec<u8>> {
     let mut key = vec![0_u8; parsed.key_len];
-    scrypt::scrypt(nonce, &parsed.preimage, &parsed.params, &mut key)
+    scrypt_fast::Workspace::new(&parsed.params)
+        .derive(nonce, &parsed.preimage, &mut key)
         .context("PoW Bot Deterrent Scrypt derivation failed")?;
     Ok(key)
 }
@@ -234,6 +235,8 @@ fn solve_worker(
         .context("PoW Bot Deterrent nonce domain exhausted")?;
     let stride = u64::try_from(workers)?;
     let mut attempts = 0_u64;
+    let mut workspace = scrypt_fast::Workspace::new(&parsed.params);
+    let mut derived = vec![0_u8; parsed.key_len];
     while !stopped.load(Ordering::Relaxed) {
         attempts = attempts
             .checked_add(1)
@@ -241,13 +244,10 @@ fn solve_worker(
         let bytes = nonce.to_be_bytes();
         let first = bytes.iter().position(|byte| *byte != 0).unwrap_or(7);
         let password = &bytes[first..];
-        let derived = match derive(parsed, password) {
-            Ok(value) => value,
-            Err(err) => {
-                stopped.store(true, Ordering::Release);
-                return Err(err);
-            }
-        };
+        if let Err(err) = workspace.derive(password, &parsed.preimage, &mut derived) {
+            stopped.store(true, Ordering::Release);
+            return Err(err).context("PoW Bot Deterrent Scrypt derivation failed");
+        }
         if matches_difficulty(parsed, &derived) {
             let value = Winner {
                 nonce: nonce_hex(nonce),

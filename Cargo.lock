@@ -250,6 +250,7 @@ dependencies = [
  "num-traits",
  "pbkdf2",
  "scrypt",
+ "scrypt-fast",
  "serde",
  "serde_json",
  "sha1",
@@ -1295,6 +1296,16 @@ dependencies = [
  "cfg-if",
  "pbkdf2",
  "salsa20",
+ "sha2",
+]
+
+[[package]]
+name = "scrypt-fast"
+version = "0.1.0"
+dependencies = [
+ "hex",
+ "pbkdf2",
+ "scrypt",
  "sha2",
 ]
 

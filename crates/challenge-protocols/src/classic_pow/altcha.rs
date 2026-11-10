@@ -367,6 +367,44 @@ fn altcha_iterative_sha<D: Digest>(initial: &[u8], iterations: u32, key_length: 
 
 /// Reuses validated Argon2id parameters and the complete memory arena across
 /// counter attempts, independent of the ALTCHA counter encoding.
+fn altcha_scrypt_parameters(
+    parameters: &AltchaChallengeParameters,
+) -> anyhow::Result<scrypt::Params> {
+    let log_n = parameters
+        .cost
+        .checked_ilog2()
+        .filter(|_| parameters.cost.is_power_of_two())
+        .context("ALTCHA Scrypt cost must be a power of two")?;
+    scrypt::Params::new(
+        u8::try_from(log_n).context("ALTCHA Scrypt log2(N) exceeds u8")?,
+        parameters.memory_cost.unwrap_or(8),
+        parameters.parallelism.unwrap_or(1),
+    )
+    .context("invalid ALTCHA Scrypt parameters")
+}
+
+struct AltchaScryptWorker {
+    workspace: scrypt_fast::Workspace,
+    output: Vec<u8>,
+}
+
+impl AltchaScryptWorker {
+    fn new(parameters: &AltchaChallengeParameters) -> anyhow::Result<Self> {
+        let params = altcha_scrypt_parameters(parameters)?;
+        Ok(Self {
+            workspace: scrypt_fast::Workspace::new(&params),
+            output: vec![0; parameters.key_length],
+        })
+    }
+
+    fn derive(&mut self, password: &[u8], salt: &[u8]) -> anyhow::Result<&[u8]> {
+        self.workspace
+            .derive(password, salt, &mut self.output)
+            .context("ALTCHA Scrypt derivation failed")?;
+        Ok(&self.output)
+    }
+}
+
 struct AltchaArgon2Worker {
     argon2: Argon2<'static>,
     memory: Vec<Argon2Block>,
@@ -425,17 +463,7 @@ pub(super) fn memory_requirement(challenge: &Value) -> Option<anyhow::Result<u64
                 .checked_add(u64::try_from(p.key_length)?)
                 .context("ALTCHA Argon2id output size overflow");
         }
-        let log_n = p
-            .cost
-            .checked_ilog2()
-            .filter(|_| p.cost.is_power_of_two())
-            .context("ALTCHA Scrypt cost must be a power of two")?;
-        let params = scrypt::Params::new(
-            u8::try_from(log_n)?,
-            p.memory_cost.unwrap_or(8),
-            p.parallelism.unwrap_or(1),
-        )
-        .context("invalid ALTCHA Scrypt parameters")?;
+        let params = altcha_scrypt_parameters(&p)?;
         super::scrypt_memory_bytes(&params, p.key_length)
     })())
 }
@@ -481,23 +509,9 @@ fn altcha_derive_key(
             }
             Ok(out)
         }
-        "SCRYPT" => {
-            let n = parameters.cost;
-            let log_n = n
-                .checked_ilog2()
-                .filter(|_| n.is_power_of_two())
-                .context("ALTCHA scrypt cost must be a power of two")?;
-            let params = scrypt::Params::new(
-                u8::try_from(log_n).context("ALTCHA scrypt log2(N) exceeds u8")?,
-                parameters.memory_cost.unwrap_or(8),
-                parameters.parallelism.unwrap_or(1),
-            )
-            .context("invalid ALTCHA scrypt parameters")?;
-            let mut out = vec![0_u8; key_length];
-            scrypt::scrypt(password, salt, &params, &mut out)
-                .context("ALTCHA scrypt derivation failed")?;
-            Ok(out)
-        }
+        "SCRYPT" => Ok(AltchaScryptWorker::new(parameters)?
+            .derive(password, salt)?
+            .to_vec()),
         "ARGON2ID" => AltchaArgon2Worker::new(parameters)?
             .derive(password, salt)
             .map(<[u8]>::to_vec),
@@ -561,6 +575,11 @@ fn solve_altcha_generic(
     } else {
         None
     };
+    let mut scrypt_worker = if parameters.algorithm.eq_ignore_ascii_case("SCRYPT") {
+        Some(AltchaScryptWorker::new(parameters)?)
+    } else {
+        None
+    };
 
     match counter_mode {
         AltchaCounterMode::Uint32 => {
@@ -569,6 +588,8 @@ fn solve_altcha_generic(
                 password.extend_from_slice(&nonce);
                 password.extend_from_slice(&counter.to_be_bytes());
                 let derived = if let Some(worker) = argon2_worker.as_mut() {
+                    Cow::Borrowed(worker.derive(&password, &salt)?)
+                } else if let Some(worker) = scrypt_worker.as_mut() {
                     Cow::Borrowed(worker.derive(&password, &salt)?)
                 } else {
                     Cow::Owned(altcha_derive_key(parameters, &salt, &password)?)
@@ -592,6 +613,8 @@ fn solve_altcha_generic(
                 password.extend_from_slice(&nonce);
                 password.extend_from_slice(counter_buffer.format(counter).as_bytes());
                 let derived = if let Some(worker) = argon2_worker.as_mut() {
+                    Cow::Borrowed(worker.derive(&password, &salt)?)
+                } else if let Some(worker) = scrypt_worker.as_mut() {
                     Cow::Borrowed(worker.derive(&password, &salt)?)
                 } else {
                     Cow::Owned(altcha_derive_key(parameters, &salt, &password)?)

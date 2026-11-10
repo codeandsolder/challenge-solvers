@@ -56,12 +56,12 @@ pub fn memory_hard_requirement(kind: &str, challenge: &Value) -> Option<anyhow::
     }
 }
 
-/// `RustCrypto` scrypt 0.12 (without optional parallel feature) allocates
-/// B = 128*r*p, V = 128*r*N and T = 128*r, plus the protocol output.
+/// `Our reusable word-oriented Scrypt workspace retains
+/// B = 128*r*p, V = 128*r*N, X = 128*r and Y = 128*r, plus output.
 fn scrypt_memory_bytes(params: &scrypt::Params, output_len: usize) -> anyhow::Result<u64> {
     let r128 = u128::from(params.r()) * 128;
     let footprint =
-        r128 * (u128::from(params.p()) + u128::from(params.n()) + 1) + u128::try_from(output_len)?;
+        r128 * (u128::from(params.p()) + u128::from(params.n()) + 2) + u128::try_from(output_len)?;
     u64::try_from(footprint).context("Scrypt workspace exceeds the memory accounting range")
 }
 
@@ -538,6 +538,28 @@ fn encode_words_le(words: [u32; 8]) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn scrypt_peak_heap_accounting_matches_real_reused_arena() -> anyhow::Result<()> {
+        for logn in [1, 4, 10, 12, 14] {
+            for r in [1, 2, 8] {
+                for p in [1, 2, 4] {
+                    let params = scrypt::Params::new(logn, r, p)?;
+                    let arena = scrypt_fast::Workspace::new(&params);
+                    for output_len in [1, 16, 32, 64] {
+                        let reported = scrypt_memory_bytes(&params, output_len)?;
+                        assert_eq!(
+                            reported,
+                            u64::try_from(arena.footprint() + output_len)?,
+                            "N={}, r={r}, p={p}, output_len={output_len}",
+                            params.n()
+                        );
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
     use super::*;
 
     fn require_error<T>(result: anyhow::Result<T>, message: &str) -> anyhow::Result<anyhow::Error> {
