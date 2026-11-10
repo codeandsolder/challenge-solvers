@@ -109,6 +109,78 @@ pub(super) fn memory_requirement(challenge: &Value) -> anyhow::Result<u64> {
     super::scrypt_memory_bytes(&parsed.params, parsed.key_len)
 }
 
+/// Whether at least one in 2^bits uniformly random lowercase hexadecimal
+/// suffixes satisfies the server's *lexicographical* threshold.
+///
+/// ASCII matters: the official Go server compares lowercase derived hex with
+/// the challenge string directly. Valid uppercase hex has different ordering
+/// from an integer interpretation.
+fn accepts_at_least(difficulty: &str, bits: i32) -> bool {
+    if bits < 0 {
+        return false;
+    }
+    let bits = usize::try_from(bits).unwrap_or(usize::MAX);
+    if bits >= difficulty.len().saturating_mul(4) {
+        return true;
+    }
+    let leading_zeros = bits / 4;
+    let partial_bits = bits % 4;
+    let pivot = if partial_bits == 0 {
+        b'f'
+    } else {
+        b"0123456789abcdef"[(1 << (4 - partial_bits)) - 1]
+    };
+    for (index, digit) in difficulty.bytes().enumerate() {
+        let boundary = if index < leading_zeros {
+            b'0'
+        } else if index == leading_zeros {
+            pivot
+        } else {
+            b'f'
+        };
+        if digit < boundary {
+            return false;
+        }
+        if digit > boundary {
+            return true;
+        }
+    }
+    true
+}
+
+/// Recommend independent nonce workers from the actual suffix threshold and
+/// Scrypt workload, not from the challenge's informational `dl` metadata.
+///
+/// N=4096,r=8,p=1 first-winner benchmarks favor one worker at 1-bit difficulty,
+/// two at 2-3 bits, four at 4-5 bits and more at higher difficulty. Scale those
+/// reference thresholds by the integer log2 of N*r*p; the service separately
+/// enforces CPU and memory permits so this suggestion never reserves resources.
+///
+/// # Errors
+/// Rejects malformed base64, JSON or invalid Scrypt parameters.
+pub fn suggested_workers(challenge: &Value, configured: usize) -> anyhow::Result<usize> {
+    let parsed = parse(challenge)?;
+    if parsed.difficulty.is_empty() || parsed.difficulty.bytes().all(|digit| digit == b'f') {
+        return Ok(1);
+    }
+    let cost = u128::from(parsed.params.n())
+        * u128::from(parsed.params.r())
+        * u128::from(parsed.params.p());
+    let cost_log2 = i32::try_from(u128::BITS - 1 - cost.leading_zeros())?;
+    // The measured N=4096, r=8, p=1 reference has 2^15 ROMix units.
+    let reference_shift = 15 - cost_log2;
+    let desired = if accepts_at_least(&parsed.difficulty, 1 + reference_shift) {
+        1
+    } else if accepts_at_least(&parsed.difficulty, 3 + reference_shift) {
+        2
+    } else if accepts_at_least(&parsed.difficulty, 5 + reference_shift) {
+        4
+    } else {
+        configured.max(1)
+    };
+    Ok(desired.min(configured.max(1)))
+}
+
 fn derive(parsed: &Parsed, nonce: &[u8]) -> anyhow::Result<Vec<u8>> {
     let mut key = vec![0_u8; parsed.key_len];
     scrypt::scrypt(nonce, &parsed.preimage, &parsed.params, &mut key)
@@ -350,5 +422,98 @@ mod tests {
         assert!(verify(&challenge_with("ffff")?, "invalid").is_err());
         assert!(solve(&challenge_with("ffff")?, Implementation::ShaNi, 1).is_err());
         Ok(())
+    }
+    #[test]
+    fn worker_targets_follow_real_lexical_threshold_not_metadata() -> anyhow::Result<()> {
+        // All fixtures deliberately advertise dl=4 regardless of verifier d.
+        for (threshold, workers) in [
+            ("", 1),
+            ("ffff", 1),
+            ("7fff", 1),
+            ("7ffe", 2),
+            ("3fff", 2),
+            ("1fff", 2),
+            ("1ffe", 4),
+            ("0fff", 4),
+            ("07ff", 4),
+            ("07fe", 8),
+            ("01ff", 8),
+            ("0000", 8),
+            ("0", 4),
+            ("F", 1),
+            ("a", 1),
+            ("0A", 4),
+            ("0a", 4),
+        ] {
+            let encoded = challenge_with(threshold)?;
+            let payload = STANDARD.decode(encoded.as_str().context("base64 fixture")?)?;
+            let mut source: Value = serde_json::from_slice(&payload)?;
+            source["N"] = json!(4096);
+            source["r"] = json!(8);
+            let realistic = Value::String(STANDARD.encode(serde_json::to_vec(&source)?));
+            assert_eq!(
+                suggested_workers(&realistic, 8)?,
+                workers,
+                "unexpected fanout for threshold {threshold:?}"
+            );
+            assert_eq!(suggested_workers(&realistic, 3)?, workers.min(3));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn worker_targets_scale_across_valid_scrypt_costs() -> anyhow::Result<()> {
+        let encoded = challenge_with("01ff")?;
+        let decoded = STANDARD.decode(encoded.as_str().context("base64 fixture")?)?;
+        let mut payload: Value = serde_json::from_slice(&decoded)?;
+        payload["N"] = json!(4096);
+        payload["r"] = json!(8);
+        let baseline = Value::String(STANDARD.encode(serde_json::to_vec(&payload)?));
+        assert_eq!(suggested_workers(&baseline, 8)?, 8);
+        payload["N"] = json!(16);
+        payload["r"] = json!(1);
+        let cheap = Value::String(STANDARD.encode(serde_json::to_vec(&payload)?));
+        assert_eq!(suggested_workers(&cheap, 8)?, 1);
+        payload["N"] = json!(16_384);
+        payload["r"] = json!(8);
+        payload["d"] = json!("7fff");
+        let expensive = Value::String(STANDARD.encode(serde_json::to_vec(&payload)?));
+        assert_eq!(suggested_workers(&expensive, 8)?, 2);
+        payload["p"] = json!(2);
+        assert_eq!(
+            suggested_workers(
+                &Value::String(STANDARD.encode(serde_json::to_vec(&payload)?)),
+                8
+            )?,
+            4
+        );
+        assert!(suggested_workers(&challenge_with("not-hex")?, 8).is_err());
+        Ok(())
+    }
+    #[test]
+    fn lexical_quantiles_match_exhaustive_two_nibble_verifier() {
+        let suffixes: Vec<String> = (0..=255).map(|value| format!("{value:02x}")).collect();
+        for threshold in suffixes.iter().flat_map(|source| {
+            // Uppercase and mixed-case thresholds are valid upstream inputs
+            // and must obey ASCII lexical order, not numeric hex order.
+            let upper = source.to_ascii_uppercase();
+            let mixed = format!("{}{}", &source[..1], &upper[1..]);
+            [source.clone(), upper, mixed]
+        }) {
+            let accepted = suffixes
+                .iter()
+                .filter(|suffix| suffix.as_str() <= threshold.as_str())
+                .count();
+            for bits in 0..=12 {
+                let expected = (accepted << bits) >= 256;
+                assert_eq!(
+                    accepts_at_least(&threshold, bits),
+                    expected,
+                    "incorrect suffix probability for {threshold:?} at {bits} bits"
+                );
+            }
+        }
+        assert!(!accepts_at_least("ff", -1));
+        assert!(accepts_at_least("", 0));
     }
 }
