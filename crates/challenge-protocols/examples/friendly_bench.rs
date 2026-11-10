@@ -1,7 +1,7 @@
 //! Reproducible Friendly Captcha CPU benchmark with independent proof checking.
 //!
 //! Run with: cargo +nightly-2026-11-03 run --locked --profile test
-//!   --package challenge-protocols --example friendly_bench
+//!   --package challenge-protocols --example `friendly_bench`
 
 use std::time::Instant;
 
