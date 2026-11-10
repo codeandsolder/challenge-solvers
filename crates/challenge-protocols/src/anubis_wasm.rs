@@ -22,6 +22,8 @@ use crate::{
 const SEARCH_SPACE: u64 = 1_u64 << 32;
 const MAX_DIFFICULTY: u32 = 64;
 pub const ARGON2_IMPLEMENTATION: &str = "portable-simd";
+/// Reusable per-worker Anubis Argon2id arena size, from the hashing engine.
+pub const ARGON2_MEMORY_BYTES: u64 = (anubis_argon2::MEMORY_KIB as u64) * 1024;
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Challenge {

@@ -41,6 +41,28 @@ pub struct Result {
     pub implementation: String,
 }
 
+/// Per-worker peak heap allocation for supported memory-hard protocols.
+///
+/// None means not memory-hard. Some(Err) means the challenge has invalid or
+/// unaccountable KDF parameters. Both cases matter to the HTTP scheduler.
+#[must_use]
+pub fn memory_hard_requirement(kind: &str, challenge: &Value) -> Option<anyhow::Result<u64>> {
+    match kind {
+        "altcha" => altcha::memory_requirement(challenge),
+        "pow-bot-deterrent" => Some(sequentialread::memory_requirement(challenge)),
+        _ => None,
+    }
+}
+
+/// `RustCrypto` scrypt 0.12 (without optional parallel feature) allocates
+/// B = 128*r*p, V = 128*r*N and T = 128*r, plus the protocol output.
+fn scrypt_memory_bytes(params: &scrypt::Params, output_len: usize) -> anyhow::Result<u64> {
+    let r128 = u128::from(params.r()) * 128;
+    let footprint =
+        r128 * (u128::from(params.p()) + u128::from(params.n()) + 1) + u128::try_from(output_len)?;
+    u64::try_from(footprint).context("Scrypt workspace exceeds the memory accounting range")
+}
+
 #[derive(Debug, Deserialize)]
 struct McaptchaRequest {
     config: PoWConfig,
@@ -518,6 +540,51 @@ mod tests {
 
     fn require_error<T>(result: anyhow::Result<T>, message: &str) -> anyhow::Result<anyhow::Error> {
         result.err().ok_or_else(|| anyhow::anyhow!("{message}"))
+    }
+
+    #[test]
+    fn memory_hard_requirements_match_actual_rustcrypto_arenas() -> anyhow::Result<()> {
+        use base64::Engine as _;
+
+        let sequentialread = json!({
+            "N": 16, "r": 1, "p": 1, "klen": 16,
+            "i": "AQIDBAUGBwg=", "d": "0fff", "dl": 4
+        });
+        let encoded =
+            json!(base64::engine::general_purpose::STANDARD.encode(sequentialread.to_string()));
+        let bytes = memory_hard_requirement("pow-bot-deterrent", &encoded)
+            .context("sequentialread profile absent")??;
+        assert_eq!(bytes, 128 * (16 + 1 + 1) + 16);
+        assert!(memory_hard_requirement("goaway", &encoded).is_none());
+
+        let parameters = json!({
+            "algorithm": "SCRYPT", "cost": 16, "memoryCost": 1,
+            "parallelism": 1, "keyLength": 16, "keyPrefix": "a",
+            "nonce": "00", "salt": "00"
+        });
+        let scrypt = json!({"parameters": parameters});
+        assert_eq!(
+            memory_hard_requirement("altcha", &scrypt).context("Scrypt profile absent")??,
+            bytes
+        );
+        let mut invalid = scrypt;
+        invalid["parameters"]["cost"] = json!(15);
+        assert!(
+            memory_hard_requirement("altcha", &invalid)
+                .context("invalid Scrypt profile absent")?
+                .is_err()
+        );
+
+        let argon2 = json!({"parameters": {
+            "algorithm": "ARGON2ID", "cost": 3, "memoryCost": 65_536,
+            "parallelism": 1, "keyLength": 32, "keyPrefix": "a",
+            "nonce": "00", "salt": "00"
+        }});
+        assert_eq!(
+            memory_hard_requirement("altcha", &argon2).context("Argon2 profile absent")??,
+            65_536 * 1024 + 32
+        );
+        Ok(())
     }
 
     #[test]
