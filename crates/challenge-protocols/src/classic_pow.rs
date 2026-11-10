@@ -18,6 +18,9 @@ use serde_json::{Value, json};
 
 mod altcha;
 mod capjs;
+mod friendly;
+/// Verify the computational proof of a Friendly Captcha v1 puzzle.
+pub use friendly::verify as verify_friendlycaptcha_v1;
 #[cfg(feature = "gpu")]
 pub mod gpu;
 
@@ -62,6 +65,7 @@ pub fn solve(
         "cerberus" => solve_cerberus(challenge, implementation),
         "goaway" => solve_goaway(challenge, implementation),
         "capjs" => capjs::solve(challenge, implementation),
+        "friendlycaptcha" => friendly::solve(challenge, implementation),
         "mcaptcha" => solve_mcaptcha(challenge, implementation),
         "haphash" => solve_haphash(challenge, implementation),
         "altcha" => altcha::solve(challenge, implementation, worker_count),

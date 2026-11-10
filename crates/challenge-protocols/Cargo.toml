@@ -12,6 +12,9 @@ gpu = ["challenge-solvers/gpu", "challenge-solvers/compare-64bit"]
 
 [dependencies]
 anyhow = "1"
+base64 = "0.22"
+blake2 = { version = "0.11", default-features = false }
+num-traits = "0.2"
 argon2 = { path = "../../vendor/argon2-fast" }
 anubis-argon2 = { path = "../anubis-argon2" }
 challenge-solvers = { path = "../challenge-solvers", default-features = false, features = ["std", "runtime-dispatch", "all-challenges"] }
