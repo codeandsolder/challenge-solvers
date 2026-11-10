@@ -1,5 +1,5 @@
 //! Reusable word-oriented Scrypt RFC 7914 derivation using a stable arena.
-//! ROMix design follows Go x/crypto/scrypt (BSD-3-Clause).
+//! `ROMix` design follows Go x/crypto/scrypt (BSD-3-Clause).
 
 #![no_std]
 extern crate alloc;
@@ -21,7 +21,7 @@ pub struct Workspace {
 }
 
 impl Workspace {
-    /// Allocate workspace from Scrypt parameters already validated by RustCrypto.
+    /// Allocate workspace from Scrypt parameters already validated by `RustCrypto`.
     #[must_use]
     pub fn new(params: &scrypt::Params) -> Self {
         let n = 1_usize << params.log_n();
@@ -37,10 +37,10 @@ impl Workspace {
             y: vec![0; r * 32],
         }
     }
-    /// Run an RFC 7914 derivation without reallocating the main ROMix arena.
+    /// Run an RFC 7914 derivation without reallocating the main `ROMix` arena.
     ///
     /// # Errors
-    /// Returns the same invalid-output-length error as RustCrypto Scrypt.
+    /// Returns the same invalid-output-length error as `RustCrypto` Scrypt.
     pub fn derive(
         &mut self,
         password: &[u8],
@@ -59,7 +59,7 @@ impl Workspace {
     }
     /// Heap bytes reserved for the workspace, excluding the caller-owned output.
     #[must_use]
-    pub fn footprint(&self) -> usize {
+    pub const fn footprint(&self) -> usize {
         self.b.len() + self.v.len() * 4 + self.x.len() * 4 + self.y.len() * 4
     }
 }
@@ -113,32 +113,49 @@ fn blockmix(tmp: &mut [u32; 16], src: &[u32], dst: &mut [u32], r: usize) {
     }
 }
 
-fn smix(bytes: &mut [u8], n: usize, r: usize, v: &mut [u32], x: &mut [u32], y: &mut [u32]) {
-    let row = 32 * r;
-    let mut tmp = [0u32; 16];
-    for (word, chunk) in x.iter_mut().zip(bytes.chunks_exact(4)) {
-        *word = u32::from_le_bytes(chunk.try_into().expect("4-byte chunk"));
+fn smix(
+    bytes: &mut [u8],
+    work_factor: usize,
+    block_factor: usize,
+    history: &mut [u32],
+    state: &mut [u32],
+    alternate: &mut [u32],
+) {
+    let row_words = 32 * block_factor;
+    let mut temporary = [0u32; 16];
+    let (input_words, remaining) = bytes.as_chunks::<4>();
+    debug_assert!(remaining.is_empty());
+    for (word, chunk) in state.iter_mut().zip(input_words.iter()) {
+        *word = u32::from_le_bytes(*chunk);
     }
-    for i in (0..n).step_by(2) {
-        v[i * row..(i + 1) * row].copy_from_slice(x);
-        blockmix(&mut tmp, x, y, r);
-        v[(i + 1) * row..(i + 2) * row].copy_from_slice(y);
-        blockmix(&mut tmp, y, x, r);
+    for slot in (0..work_factor).step_by(2) {
+        history[slot * row_words..(slot + 1) * row_words].copy_from_slice(state);
+        blockmix(&mut temporary, state, alternate, block_factor);
+        history[(slot + 1) * row_words..(slot + 2) * row_words].copy_from_slice(alternate);
+        blockmix(&mut temporary, alternate, state, block_factor);
     }
-    for _ in (0..n).step_by(2) {
-        let i = (x[(2 * r - 1) * 16] as usize) & (n - 1);
-        for (a, b) in x.iter_mut().zip(&v[i * row..(i + 1) * row]) {
-            *a ^= *b;
+    for _ in (0..work_factor).step_by(2) {
+        let slot = (state[(2 * block_factor - 1) * 16] as usize) & (work_factor - 1);
+        for (word, previous) in state
+            .iter_mut()
+            .zip(&history[slot * row_words..(slot + 1) * row_words])
+        {
+            *word ^= *previous;
         }
-        blockmix(&mut tmp, x, y, r);
-        let i = (y[(2 * r - 1) * 16] as usize) & (n - 1);
-        for (a, b) in y.iter_mut().zip(&v[i * row..(i + 1) * row]) {
-            *a ^= *b;
+        blockmix(&mut temporary, state, alternate, block_factor);
+        let slot = (alternate[(2 * block_factor - 1) * 16] as usize) & (work_factor - 1);
+        for (word, previous) in alternate
+            .iter_mut()
+            .zip(&history[slot * row_words..(slot + 1) * row_words])
+        {
+            *word ^= *previous;
         }
-        blockmix(&mut tmp, y, x, r);
+        blockmix(&mut temporary, alternate, state, block_factor);
     }
-    for (word, chunk) in x.iter().zip(bytes.chunks_exact_mut(4)) {
-        chunk.copy_from_slice(&word.to_le_bytes());
+    let (output_words, remaining) = bytes.as_chunks_mut::<4>();
+    debug_assert!(remaining.is_empty());
+    for (word, chunk) in state.iter().zip(output_words.iter_mut()) {
+        *chunk = word.to_le_bytes();
     }
 }
 
