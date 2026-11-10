@@ -104,6 +104,11 @@ fn nonce_hex(nonce: u64) -> String {
     hex::encode(&full[first..])
 }
 
+pub(super) fn memory_requirement(challenge: &Value) -> anyhow::Result<u64> {
+    let parsed = parse(challenge)?;
+    super::scrypt_memory_bytes(&parsed.params, parsed.key_len)
+}
+
 fn derive(parsed: &Parsed, nonce: &[u8]) -> anyhow::Result<Vec<u8>> {
     let mut key = vec![0_u8; parsed.key_len];
     scrypt::scrypt(nonce, &parsed.preimage, &parsed.params, &mut key)

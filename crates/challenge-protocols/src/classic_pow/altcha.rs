@@ -400,6 +400,46 @@ impl AltchaArgon2Worker {
     }
 }
 
+pub(super) fn memory_requirement(challenge: &Value) -> Option<anyhow::Result<u64>> {
+    let algorithm = challenge.pointer("/parameters/algorithm")?.as_str()?;
+    if !algorithm.eq_ignore_ascii_case("SCRYPT") && !algorithm.eq_ignore_ascii_case("ARGON2ID") {
+        return None;
+    }
+    Some((|| {
+        let parsed: AltchaChallenge =
+            serde_json::from_value(challenge.clone()).context("invalid ALTCHA KDF challenge")?;
+        let p = parsed.parameters;
+        if algorithm.eq_ignore_ascii_case("ARGON2ID") {
+            let params = Argon2Params::new(
+                p.memory_cost
+                    .context("ALTCHA Argon2id requires memoryCost")?,
+                p.cost,
+                p.parallelism.unwrap_or(1),
+                Some(p.key_length),
+            )
+            .context("invalid ALTCHA Argon2id parameters")?;
+            let arena = u64::try_from(params.block_count())?
+                .checked_mul(1024)
+                .context("ALTCHA Argon2id arena size overflow")?;
+            return arena
+                .checked_add(u64::try_from(p.key_length)?)
+                .context("ALTCHA Argon2id output size overflow");
+        }
+        let log_n = p
+            .cost
+            .checked_ilog2()
+            .filter(|_| p.cost.is_power_of_two())
+            .context("ALTCHA Scrypt cost must be a power of two")?;
+        let params = scrypt::Params::new(
+            u8::try_from(log_n)?,
+            p.memory_cost.unwrap_or(8),
+            p.parallelism.unwrap_or(1),
+        )
+        .context("invalid ALTCHA Scrypt parameters")?;
+        super::scrypt_memory_bytes(&params, p.key_length)
+    })())
+}
+
 fn altcha_derive_key(
     parameters: &AltchaChallengeParameters,
     salt: &[u8],
