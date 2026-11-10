@@ -35,7 +35,7 @@ struct Puzzle<'a> {
 /// The public difficulty domain maps entirely inside `u32`; errors indicate
 /// a violated numeric assumption rather than silently altering the threshold.
 fn threshold(difficulty: u8) -> anyhow::Result<u32> {
-    let scaled = 2_f64.powf((255.999 - f64::from(difficulty)) / 8.0);
+    let scaled = ((255.999 - f64::from(difficulty)) / 8.0).exp2();
     let result = scaled
         .to_u32()
         .context("Friendly Captcha difficulty does not map to u32")?;
@@ -75,6 +75,11 @@ fn parse(puzzle: &str) -> anyhow::Result<Puzzle<'_>> {
     })
 }
 
+fn diagnostics(seconds: u16) -> [u8; 3] {
+    let duration = seconds.to_be_bytes();
+    [0, duration[0], duration[1]]
+}
+
 fn matches(padded: &[u8; 128], threshold: u32) -> bool {
     let digest = Blake2b256::digest(padded);
     u32::from_le_bytes([digest[0], digest[1], digest[2], digest[3]]) < threshold
@@ -109,7 +114,7 @@ pub fn verify(puzzle: &str, solutions: &[u8]) -> anyhow::Result<bool> {
         return Ok(false);
     }
     let mut seen = HashSet::with_capacity(usize::from(puzzle.solutions));
-    for solution in solutions.chunks_exact(8) {
+    for solution in solutions.as_chunks::<8>().0 {
         let mut nonce = [0_u8; 8];
         nonce.copy_from_slice(solution);
         if !seen.insert(nonce) {
@@ -148,7 +153,7 @@ pub(super) fn solve(challenge: Value, implementation: Implementation) -> anyhow:
     }
     let elapsed = started.elapsed();
     let seconds = u16::try_from(elapsed.as_secs()).unwrap_or(u16::MAX);
-    let diagnostics = [0_u8, seconds.to_le_bytes()[0], seconds.to_le_bytes()[1]];
+    let diagnostics = diagnostics(seconds);
     let response = format!(
         "{}.{}.{}.{}",
         puzzle.signature,
@@ -183,6 +188,7 @@ mod tests {
     #[test]
     fn threshold_is_monotonic_with_specified_bounds() -> anyhow::Result<()> {
         assert_eq!(threshold(255)?, 1);
+        assert_eq!(diagnostics(0x1234), [0, 0x12, 0x34]);
         assert!(threshold(0)? > 4_290_000_000);
         for d in 1..=u8::MAX {
             assert!(threshold(d - 1)? >= threshold(d)?);
