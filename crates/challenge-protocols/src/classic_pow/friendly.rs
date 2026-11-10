@@ -75,7 +75,7 @@ fn parse(puzzle: &str) -> anyhow::Result<Puzzle<'_>> {
     })
 }
 
-fn diagnostics(seconds: u16) -> [u8; 3] {
+const fn diagnostics(seconds: u16) -> [u8; 3] {
     let duration = seconds.to_be_bytes();
     [0, duration[0], duration[1]]
 }
