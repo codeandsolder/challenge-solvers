@@ -124,7 +124,7 @@ fn smix(
     let row_words = 32 * block_factor;
     let mut temporary = [0u32; 16];
     let (input_words, remaining) = bytes.as_chunks::<4>();
-    debug_assert!(remaining.is_empty());
+    debug_assert_eq!(remaining, []);
     for (word, chunk) in state.iter_mut().zip(input_words.iter()) {
         *word = u32::from_le_bytes(*chunk);
     }
@@ -153,7 +153,7 @@ fn smix(
         blockmix(&mut temporary, alternate, state, block_factor);
     }
     let (output_words, remaining) = bytes.as_chunks_mut::<4>();
-    debug_assert!(remaining.is_empty());
+    debug_assert_eq!(remaining, []);
     for (word, chunk) in state.iter().zip(output_words.iter_mut()) {
         *chunk = word.to_le_bytes();
     }
