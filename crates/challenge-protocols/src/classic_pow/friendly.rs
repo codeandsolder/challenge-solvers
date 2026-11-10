@@ -10,9 +10,6 @@ use std::{
     time::Instant,
 };
 
-mod blake2b;
-use blake2b::SingleBlock;
-
 use anyhow::{Context, ensure};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use blake2::{Blake2b256, Digest};
@@ -93,26 +90,17 @@ fn matches(padded: &[u8; 128], threshold: u32) -> bool {
     u32::from_le_bytes([digest[0], digest[1], digest[2], digest[3]]) < threshold
 }
 
-fn search(
-    puzzle: &Puzzle<'_>,
-    index: u8,
-    implementation: Implementation,
-) -> anyhow::Result<([u8; 8], u64)> {
+fn search(puzzle: &Puzzle<'_>, index: u8) -> anyhow::Result<([u8; 8], u64)> {
     let mut input = puzzle.padded;
     // Upstream uses one independently searched 2^32-nonce bank per solution.
     // These disjoint banks also guarantee uniqueness of all returned values.
     input[120] = index;
-    let block = SingleBlock::new(&input);
     for counter in 0..=u32::MAX {
-        let nonce = u64::from(index) | (u64::from(counter) << 32);
-        let matched = if matches!(implementation, Implementation::Safe) {
-            input[124..128].copy_from_slice(&counter.to_le_bytes());
-            matches(&input, puzzle.threshold)
-        } else {
-            block.first_u32(nonce) < puzzle.threshold
-        };
-        if matched {
-            return Ok((nonce.to_le_bytes(), u64::from(counter) + 1));
+        input[124..128].copy_from_slice(&counter.to_le_bytes());
+        if matches(&input, puzzle.threshold) {
+            let mut nonce = [0_u8; 8];
+            nonce.copy_from_slice(&input[120..128]);
+            return Ok((nonce, u64::from(counter) + 1));
         }
     }
     anyhow::bail!("Friendly Captcha nonce bank exhausted for index {index}")
@@ -193,7 +181,7 @@ pub(super) fn solve(
     let mut solutions = vec![None; count];
     if workers == 1 {
         for (i, slot) in solutions.iter_mut().enumerate() {
-            *slot = Some(search(&puzzle, u8::try_from(i)?, implementation)?);
+            *slot = Some(search(&puzzle, u8::try_from(i)?)?);
         }
     } else {
         let next = AtomicUsize::new(0);
@@ -209,7 +197,7 @@ pub(super) fn solve(
                         if index >= count {
                             break;
                         }
-                        let result = search(puzzle, u8::try_from(index)?, implementation)?;
+                        let result = search(puzzle, u8::try_from(index)?)?;
                         found.push((index, result));
                     }
                     Ok(found)
@@ -252,11 +240,7 @@ pub(super) fn solve(
             "solution_count": puzzle.solutions,
         }),
         solve_ms: elapsed.as_secs_f64() * 1000.0,
-        implementation: if matches!(implementation, Implementation::Safe) {
-            "rustcrypto-blake2b".to_owned()
-        } else {
-            "blake2b-single-block".to_owned()
-        },
+        implementation: "rustcrypto-blake2b".to_owned(),
     })
 }
 
@@ -331,8 +315,7 @@ mod tests {
     }
 
     #[test]
-    fn accelerated_and_reference_solver_agree_under_parallel_bank_scheduling() -> anyhow::Result<()>
-    {
+    fn serial_and_parallel_solvers_agree_under_parallel_bank_scheduling() -> anyhow::Result<()> {
         for extra in [0, 32] {
             let puzzle = make_puzzle(96, 8, extra);
             let challenge = json!({"puzzle": puzzle});
