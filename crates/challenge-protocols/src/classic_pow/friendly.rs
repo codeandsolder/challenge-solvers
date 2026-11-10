@@ -3,7 +3,12 @@
 //! The signed puzzle is opaque: this module solves its public computation,
 //! leaving signature, expiry, site binding, and replay checks to the issuer.
 
-use std::{collections::HashSet, time::Instant};
+use std::{
+    collections::HashSet,
+    sync::atomic::{AtomicUsize, Ordering},
+    thread,
+    time::Instant,
+};
 
 use anyhow::{Context, ensure};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
@@ -129,7 +134,32 @@ pub fn verify(puzzle: &str, solutions: &[u8]) -> anyhow::Result<bool> {
     Ok(true)
 }
 
-pub(super) fn solve(challenge: Value, implementation: Implementation) -> anyhow::Result<Result> {
+/// Suggested CPU reservation for independently searchable solution banks.
+///
+/// Cheap puzzles do not spawn needless threads; expensive puzzles can use
+/// idle CPU permits, capped by the number of independent solutions.
+#[must_use]
+pub fn suggested_workers(challenge: &Value, available: usize) -> Option<usize> {
+    if available == 0 {
+        return None;
+    }
+    let encoded = challenge
+        .as_str()
+        .or_else(|| challenge.get("puzzle")?.as_str())?;
+    let puzzle = parse(encoded).ok()?;
+    let expected_per_bank = (u64::from(u32::MAX) + 1).div_ceil(u64::from(puzzle.threshold));
+    let expected_total = expected_per_bank.saturating_mul(u64::from(puzzle.solutions));
+    let worthwhile = usize::try_from(expected_total.div_ceil(16_384))
+        .unwrap_or(usize::MAX)
+        .max(1);
+    Some(worthwhile.min(usize::from(puzzle.solutions)).min(available))
+}
+
+pub(super) fn solve(
+    challenge: Value,
+    implementation: Implementation,
+    worker_count: usize,
+) -> anyhow::Result<Result> {
     ensure!(
         matches!(implementation, Implementation::Auto | Implementation::Safe),
         "Friendly Captcha BLAKE2b supports only auto and safe CPU implementations"
@@ -142,10 +172,52 @@ pub(super) fn solve(challenge: Value, implementation: Implementation) -> anyhow:
     };
     let puzzle = parse(encoded)?;
     let started = Instant::now();
-    let mut bytes = Vec::with_capacity(usize::from(puzzle.solutions) * 8);
+    ensure!(
+        worker_count > 0,
+        "Friendly Captcha requires at least one CPU worker"
+    );
+    let count = usize::from(puzzle.solutions);
+    let workers = worker_count.min(count);
+    let mut solutions = vec![None; count];
+    if workers == 1 {
+        for (i, slot) in solutions.iter_mut().enumerate() {
+            *slot = Some(search(&puzzle, u8::try_from(i)?)?);
+        }
+    } else {
+        let next = AtomicUsize::new(0);
+        thread::scope(|scope| -> anyhow::Result<()> {
+            let mut handles = Vec::with_capacity(workers);
+            for _ in 0..workers {
+                let next = &next;
+                let puzzle = &puzzle;
+                handles.push(scope.spawn(move || -> anyhow::Result<Vec<_>> {
+                    let mut found = Vec::new();
+                    loop {
+                        let index = next.fetch_add(1, Ordering::Relaxed);
+                        if index >= count {
+                            break;
+                        }
+                        let result = search(puzzle, u8::try_from(index)?)?;
+                        found.push((index, result));
+                    }
+                    Ok(found)
+                }));
+            }
+            for handle in handles {
+                for (index, result) in handle
+                    .join()
+                    .map_err(|_| anyhow::anyhow!("Friendly Captcha search worker panicked"))??
+                {
+                    solutions[index] = Some(result);
+                }
+            }
+            Ok(())
+        })?;
+    }
+    let mut bytes = Vec::with_capacity(count * 8);
     let mut attempts = 0_u64;
-    for i in 0..puzzle.solutions {
-        let (nonce, count) = search(&puzzle, i)?;
+    for solution in solutions {
+        let (nonce, count) = solution.context("Friendly Captcha bank missing a solution")?;
         bytes.extend_from_slice(&nonce);
         attempts = attempts
             .checked_add(count)
@@ -200,7 +272,7 @@ mod tests {
     fn full_response_roundtrip_and_rejection() -> anyhow::Result<()> {
         for extra in [0, 11, 32] {
             let puzzle = make_puzzle(112, 3, extra);
-            let result = solve(json!({"puzzle":puzzle}), Implementation::Auto)?;
+            let result = solve(json!({"puzzle":puzzle}), Implementation::Auto, 1)?;
             let response = result.answer["response"]
                 .as_str()
                 .context("missing response")?;
@@ -243,6 +315,45 @@ mod tests {
     }
 
     #[test]
+    fn serial_and_parallel_solvers_agree_under_parallel_bank_scheduling() -> anyhow::Result<()> {
+        for extra in [0, 32] {
+            let puzzle = make_puzzle(96, 8, extra);
+            let challenge = json!({"puzzle": puzzle});
+            assert_eq!(suggested_workers(&challenge, 1), Some(1));
+            assert!(suggested_workers(&challenge, 8).is_some_and(|n| n > 1));
+            let reference = solve(challenge.clone(), Implementation::Safe, 1)?;
+            let accelerated = solve(challenge.clone(), Implementation::Auto, 1)?;
+            let parallel = solve(challenge, Implementation::Auto, 4)?;
+            assert_eq!(
+                accelerated.answer["response"]
+                    .as_str()
+                    .and_then(|s| s.split('.').nth(2)),
+                reference.answer["response"]
+                    .as_str()
+                    .and_then(|s| s.split('.').nth(2))
+            );
+            assert_eq!(
+                parallel.answer["response"]
+                    .as_str()
+                    .and_then(|s| s.split('.').nth(2)),
+                reference.answer["response"]
+                    .as_str()
+                    .and_then(|s| s.split('.').nth(2))
+            );
+            assert_eq!(
+                reference.answer["attempted_nonces"],
+                accelerated.answer["attempted_nonces"]
+            );
+            assert_eq!(
+                reference.answer["attempted_nonces"],
+                parallel.answer["attempted_nonces"]
+            );
+            assert_eq!(parallel.answer["solution_count"], 8);
+        }
+        Ok(())
+    }
+
+    #[test]
     fn rejects_malformed_puzzles_and_invalid_cpu_selectors() -> anyhow::Result<()> {
         for puzzle in ["bad", ".YWJj", "x.%%%", "x.AAAA", "x.a.b"] {
             assert!(parse(puzzle).is_err(), "accepted malformed: {puzzle}");
@@ -254,7 +365,7 @@ mod tests {
         invalid[14] = 0;
         assert!(parse(&format!("sig.{}", STANDARD.encode(&invalid))).is_err());
         let request = json!({"puzzle":make_puzzle(0, 1, 0)});
-        assert!(solve(request, Implementation::ShaNi).is_err());
+        assert!(solve(request, Implementation::ShaNi, 1).is_err());
         Ok(())
     }
 }
