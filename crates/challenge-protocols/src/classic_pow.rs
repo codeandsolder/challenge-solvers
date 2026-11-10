@@ -54,7 +54,7 @@ pub fn memory_hard_requirement(kind: &str, challenge: &Value) -> Option<anyhow::
     }
 }
 
-/// RustCrypto scrypt 0.12 (without optional parallel feature) allocates
+/// `RustCrypto` scrypt 0.12 (without optional parallel feature) allocates
 /// B = 128*r*p, V = 128*r*N and T = 128*r, plus the protocol output.
 fn scrypt_memory_bytes(params: &scrypt::Params, output_len: usize) -> anyhow::Result<u64> {
     let r128 = u128::from(params.r()) * 128;
