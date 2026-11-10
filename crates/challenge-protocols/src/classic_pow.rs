@@ -19,6 +19,8 @@ use serde_json::{Value, json};
 mod altcha;
 mod capjs;
 mod friendly;
+/// Verify the computational proof of a Friendly Captcha v1 puzzle.
+pub use friendly::verify as verify_friendlycaptcha_v1;
 #[cfg(feature = "gpu")]
 pub mod gpu;
 
