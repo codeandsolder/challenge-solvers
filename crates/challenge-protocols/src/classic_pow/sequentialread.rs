@@ -131,12 +131,10 @@ fn accepts_at_least(difficulty: &str, bits: i32) -> bool {
         b"0123456789abcdef"[(1 << (4 - partial_bits)) - 1]
     };
     for (index, digit) in difficulty.bytes().enumerate() {
-        let boundary = if index < leading_zeros {
-            b'0'
-        } else if index == leading_zeros {
-            pivot
-        } else {
-            b'f'
+        let boundary = match index.cmp(&leading_zeros) {
+            std::cmp::Ordering::Less => b'0',
+            std::cmp::Ordering::Equal => pivot,
+            std::cmp::Ordering::Greater => b'f',
         };
         if digit < boundary {
             return false;
