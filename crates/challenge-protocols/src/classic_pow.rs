@@ -25,6 +25,8 @@ mod tor_equix;
 pub use friendly::suggested_workers as friendlycaptcha_suggested_workers;
 /// Verify the computational proof of a Friendly Captcha v1 puzzle.
 pub use friendly::verify as verify_friendlycaptcha_v1;
+/// Worker recommendation for sequentialread Scrypt nonce search.
+pub use sequentialread::suggested_workers as pow_bot_deterrent_suggested_workers;
 /// Independently verify a sequentialread Scrypt `PoW` proof against its challenge.
 pub use sequentialread::verify as verify_pow_bot_deterrent;
 /// Verify a Tor onion-service v1 proof extension against its descriptor inputs.
