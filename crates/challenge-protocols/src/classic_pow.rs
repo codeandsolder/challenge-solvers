@@ -56,7 +56,7 @@ pub fn memory_hard_requirement(kind: &str, challenge: &Value) -> Option<anyhow::
     }
 }
 
-/// `Our reusable word-oriented Scrypt workspace retains
+/// Our reusable word-oriented Scrypt workspace retains
 /// B = 128*r*p, V = 128*r*N, X = 128*r and Y = 128*r, plus output.
 fn scrypt_memory_bytes(params: &scrypt::Params, output_len: usize) -> anyhow::Result<u64> {
     let r128 = u128::from(params.r()) * 128;
