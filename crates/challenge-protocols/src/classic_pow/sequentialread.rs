@@ -204,7 +204,7 @@ pub(super) fn solve(
         worker_count > 0,
         "PoW Bot Deterrent needs at least one CPU worker"
     );
-    let parsed = parse(&challenge)?;
+    let parsed = parse(challenge)?;
     let started = Instant::now();
     let stopped = AtomicBool::new(false);
     let winner = OnceLock::new();
