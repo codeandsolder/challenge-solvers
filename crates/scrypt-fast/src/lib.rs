@@ -64,7 +64,7 @@ impl Workspace {
     }
 }
 
-#[inline]
+#[inline(always)]
 fn salsa_xor(tmp: &mut [u32; 16], src: &[u32], dst: &mut [u32]) {
     let mut w = [0u32; 16];
     for i in 0..16 {
@@ -96,7 +96,7 @@ fn salsa_xor(tmp: &mut [u32; 16], src: &[u32], dst: &mut [u32]) {
     }
 }
 
-#[inline]
+#[inline(always)]
 fn blockmix(tmp: &mut [u32; 16], src: &[u32], dst: &mut [u32], r: usize) {
     tmp.copy_from_slice(&src[(2 * r - 1) * 16..2 * r * 16]);
     for i in 0..r {
