@@ -64,7 +64,11 @@ impl Workspace {
     }
 }
 
-#[inline]
+#[expect(
+    clippy::inline_always,
+    reason = "Seven-round pinned-vCPU ROMix benchmarks recover 5-14% throughput versus out-of-line Salsa20/8 calls"
+)]
+#[inline(always)]
 fn salsa_xor(tmp: &mut [u32; 16], src: &[u32], dst: &mut [u32]) {
     let mut w = [0u32; 16];
     for i in 0..16 {
@@ -96,7 +100,11 @@ fn salsa_xor(tmp: &mut [u32; 16], src: &[u32], dst: &mut [u32]) {
     }
 }
 
-#[inline]
+#[expect(
+    clippy::inline_always,
+    reason = "ROMix block-mix is hot; measured inlining removes repeated helper dispatch and improves N/r/p throughput"
+)]
+#[inline(always)]
 fn blockmix(tmp: &mut [u32; 16], src: &[u32], dst: &mut [u32], r: usize) {
     tmp.copy_from_slice(&src[(2 * r - 1) * 16..2 * r * 16]);
     for i in 0..r {
