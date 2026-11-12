@@ -55,6 +55,27 @@ struct CapV2HashWx {
     n: u32,
 }
 
+/// Reject an unsupported challenge before spending CPU time on any earlier
+/// subchallenge in a mixed format-2 envelope. Both CPU and GPU routes use this
+/// same preflight so neither can partially execute a challenge we cannot solve.
+fn parse_cap_v2_envelope(challenge: Value) -> anyhow::Result<CapV2Envelope> {
+    let envelope: CapV2Envelope =
+        serde_json::from_value(challenge).context("invalid Cap.js format-2 challenge")?;
+    ensure!(envelope.format == 2, "invalid Cap.js format-2 marker");
+    ensure!(
+        !envelope.challenges.is_empty(),
+        "Cap.js format-2 challenge list is empty"
+    );
+    ensure!(
+        !envelope
+            .challenges
+            .iter()
+            .any(|challenge| matches!(challenge, CapV2Challenge::Instrumentation { .. })),
+        "Cap.js instrumentation is a browser-environment probe, not a proof-of-work mode"
+    );
+    Ok(envelope)
+}
+
 fn solve_cap_decimal_cpu(
     prefix: &[u8],
     target: u64,
@@ -262,13 +283,7 @@ fn cap_v2_backend_name(sha_backend: Option<&str>, used_hashwx: bool, used_rsw: b
 }
 
 fn solve_capjs_v2(challenge: Value, implementation: Implementation) -> anyhow::Result<Result> {
-    let envelope: CapV2Envelope =
-        serde_json::from_value(challenge).context("invalid Cap.js format-2 challenge")?;
-    ensure!(envelope.format == 2, "invalid Cap.js format-2 marker");
-    ensure!(
-        !envelope.challenges.is_empty(),
-        "Cap.js format-2 challenge list is empty"
-    );
+    let envelope = parse_cap_v2_envelope(challenge)?;
     let started = Instant::now();
     let mut attempted_nonces = 0_u64;
     let mut solutions = Vec::with_capacity(envelope.challenges.len());
@@ -375,13 +390,7 @@ async fn solve_capjs_v2_gpu(
     gpu: &challenge_solvers::gpu::GpuContext,
     challenge: Value,
 ) -> anyhow::Result<Result> {
-    let envelope: CapV2Envelope =
-        serde_json::from_value(challenge).context("invalid Cap.js format-2 challenge")?;
-    ensure!(envelope.format == 2, "invalid Cap.js format-2 marker");
-    ensure!(
-        !envelope.challenges.is_empty(),
-        "Cap.js format-2 challenge list is empty"
-    );
+    let envelope = parse_cap_v2_envelope(challenge)?;
 
     let started = Instant::now();
     let mut attempted_nonces = 0_u64;
@@ -572,6 +581,36 @@ mod tests {
         .err()
         .context("instrumentation must be rejected")?;
         assert!(error.to_string().contains("browser-environment probe"));
+        Ok(())
+    }
+
+    #[test]
+    fn format_two_instrumentation_fails_before_prior_expensive_work() -> anyhow::Result<()> {
+        // The RSW subchallenge must never be evaluated. Its invalid payload
+        // makes an early validation failure deterministic rather than timed.
+        let challenge = json!({
+            "token": "fixture-token",
+            "format": 2,
+            "challenges": [
+                { "protocol": "rsw", "payload": { "N": "invalid", "x": "2", "t": 0 } },
+                { "protocol": "instrumentation", "payload": {} }
+            ]
+        });
+        for error in [
+            parse_cap_v2_envelope(challenge.clone())
+                .err()
+                .context("preflight must reject instrumentation")?
+                .to_string(),
+            solve(challenge, Implementation::Auto)
+                .err()
+                .context("CPU solver must reject instrumentation")?
+                .to_string(),
+        ] {
+            assert!(
+                error.contains("browser-environment probe"),
+                "expected early instrumentation rejection, got {error}"
+            );
+        }
         Ok(())
     }
 
