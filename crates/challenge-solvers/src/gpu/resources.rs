@@ -1,7 +1,7 @@
 //! GPU adapter selection, pipeline compilation, bind groups and context initialization.
 //!
 //! Keep device initialization apart from the steady-state submission hot paths.
-//! The public GpuContext type and all protocol-facing behavior remain in the parent module.
+//! The public `GpuContext` type and all protocol-facing behavior remain in the parent module.
 
 use super::shaders::{
     altcha_shader_source, cerberus_shader_source, generic_single_block_shader_source,
