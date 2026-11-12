@@ -160,18 +160,32 @@ fn solve_cap_v2_sha256(
     Ok((json!({ "nonce": nonce }), attempted))
 }
 
+/// Apply repeated modular squaring in bounded blocks.
+///
+/// Each block is x^(2^k) mod N. num-bigint uses Montgomery arithmetic for
+/// odd moduli, avoiding an expensive division after every individual square.
+/// Bounded blocks prevent a large untrusted t from allocating a huge exponent.
+/// Even moduli retain correct results through num-bigint's general fallback.
+fn repeated_mod_squaring(mut value: BigUint, modulus: &BigUint, mut rounds: u32) -> BigUint {
+    const SQUARES_PER_BLOCK: u32 = 8_192;
+    value %= modulus;
+    while rounds != 0 {
+        let count = rounds.min(SQUARES_PER_BLOCK);
+        value = value.modpow(&(BigUint::from(1_u8) << count), modulus);
+        rounds -= count;
+    }
+    value
+}
+
 fn solve_cap_v2_rsw(payload: &CapV2Rsw) -> anyhow::Result<Value> {
     ensure!(payload.t > 0, "Cap.js RSW iteration count must be positive");
     let modulus = BigUint::parse_bytes(payload.modulus.as_bytes(), 16)
         .context("invalid Cap.js RSW modulus")?;
-    let mut value =
+    let value =
         BigUint::parse_bytes(payload.x.as_bytes(), 16).context("invalid Cap.js RSW input")?;
     ensure!(modulus.bits() > 1, "Cap.js RSW modulus is too small");
-    value %= &modulus;
-    for _ in 0..payload.t {
-        value = (&value * &value) % &modulus;
-    }
-    Ok(json!({ "y": value.to_str_radix(16) }))
+    let result = repeated_mod_squaring(value, &modulus, payload.t);
+    Ok(json!({ "y": result.to_str_radix(16) }))
 }
 
 fn hashwx_seed(challenge: &[u8; 32], block: u64) -> [u8; 32] {
@@ -474,6 +488,29 @@ mod tests {
         assert!(cap_v2_prefix("g").is_err());
         assert!(cap_v2_prefix("00000000000000000").is_err());
         Ok(())
+    }
+
+    #[test]
+    fn rsw_montgomery_blocks_match_direct_squaring() {
+        // Exercise both num-bigint's odd-modulus Montgomery path and its
+        // even-modulus fallback. Include boundary-crossing counts and x >= N.
+        for bits in [2_usize, 32, 64, 129, 1024, 2048] {
+            for offset in [1_u8, 2_u8] {
+                let modulus = (BigUint::from(1_u8) << bits) - BigUint::from(offset);
+                for rounds in [0_u32, 1, 2, 17, 129, 8_192, 8_193] {
+                    let input = &modulus + BigUint::from(7_u8);
+                    let mut expected = &input % &modulus;
+                    for _ in 0..rounds {
+                        expected = (&expected * &expected) % &modulus;
+                    }
+                    assert_eq!(
+                        repeated_mod_squaring(input, &modulus, rounds),
+                        expected,
+                        "bits={bits} offset={offset} rounds={rounds}"
+                    );
+                }
+            }
+        }
     }
 
     #[test]
