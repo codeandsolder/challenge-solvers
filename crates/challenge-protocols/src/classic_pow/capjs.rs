@@ -76,6 +76,13 @@ fn parse_cap_v2_envelope(challenge: Value) -> anyhow::Result<CapV2Envelope> {
     Ok(envelope)
 }
 
+/// Validate a complete format-2 envelope for a caller that may split work
+/// across compute backends. Reject browser-only instrumentation before any
+/// partial SHA/RSW/HashWX work is scheduled.
+pub(super) fn preflight_format_two(challenge: &Value) -> anyhow::Result<()> {
+    parse_cap_v2_envelope(challenge.clone()).map(|_| ())
+}
+
 fn solve_cap_decimal_cpu(
     prefix: &[u8],
     target: u64,

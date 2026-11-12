@@ -16,8 +16,6 @@ pub const IV: [u32; 8] = crate::sha256::IV;
 
 pub const FLAG_CHUNK_START: u32 = 0x01;
 pub const FLAG_CHUNK_END: u32 = 0x02;
-#[expect(dead_code, reason = "reserved for the parent-node BLAKE3 mode")]
-pub const FLAG_PARENT: u32 = 0x04;
 pub const FLAG_ROOT: u32 = 0x08;
 
 const PERMUTATION: [usize; 16] = [2, 6, 3, 10, 7, 0, 4, 13, 1, 11, 12, 5, 9, 14, 15, 8];
