@@ -1,5 +1,5 @@
 //! Protocol WGSL shader construction. Shader bodies are intentionally unchanged.
-use super::*;
+use super::{CANCEL_INTERVAL, Digest, STEPS, String, WG_SIZE, append_fmt};
 
 pub fn sha256_core_shader_source() -> String {
     let mut rounds = String::new();
