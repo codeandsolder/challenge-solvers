@@ -511,7 +511,7 @@ mod tests {
             for offset in [1_u8, 2_u8] {
                 let modulus = (Integer::from(1) << bits) - Integer::from(offset);
                 for rounds in [0_u32, 1, 2, 17, 129, 8_192, 8_193] {
-                    for input in [Integer::from(0), Integer::from(1), &modulus + 7] {
+                    for input in [Integer::from(0), Integer::from(1), modulus.clone() + 7] {
                         let mut expected = input.clone();
                         expected.modulo_mut(&modulus);
                         for _ in 0..rounds {
