@@ -11,7 +11,7 @@ pub mod portable;
 #[cfg(any(target_arch = "x86_64", target_arch = "x86"))]
 pub mod sha_ni;
 
-// Initial hash values for SHA-256
+/// Standard SHA-256 initial chaining words.
 pub const IV: [u32; 8] = [
     0x6a09_e667,
     0xbb67_ae85,
@@ -23,6 +23,7 @@ pub const IV: [u32; 8] = [
     0x5be0_cd19,
 ];
 
+/// Standard SHA-256 round constants.
 pub const K32: [u32; 64] = [
     0x428a_2f98,
     0x7137_4491,
@@ -89,6 +90,33 @@ pub const K32: [u32; 64] = [
     0xbef9_a3f7,
     0xc671_78f2,
 ];
+
+#[cfg(test)]
+mod public_prefix_tests {
+    #[test]
+    fn full_block_midstate_matches_sha256_nist_abc_vector() {
+        let mut padded = [0_u8; 64];
+        padded[..3].copy_from_slice(b"abc");
+        padded[3] = 0x80;
+        padded[63] = 24;
+        let words = crate::sha256_full_block_midstate(&padded);
+        assert_eq!(
+            words,
+            [
+                0xba78_16bf,
+                0x8f01_cfea,
+                0x4141_40de,
+                0x5dae_2223,
+                0xb003_61a3,
+                0x9617_7a9c,
+                0xb410_ff61,
+                0xf200_15ad,
+            ]
+        );
+        assert_eq!(crate::sha256_full_block_midstate(b"abc"), super::IV);
+        assert_eq!(crate::SHA256_ROUND_CONSTANTS[0], 0x428a_2f98,);
+    }
+}
 
 /// pre-compute the message schedule for a single block
 ///

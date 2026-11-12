@@ -43,6 +43,18 @@ pub struct Result {
     pub implementation: String,
 }
 
+/// Validate a complete Cap.js format-2 envelope before CPU/GPU splitting.
+///
+/// This uses the single-backend parser and rejection rules rather than
+/// maintaining a second, potentially divergent service-side validator.
+///
+/// # Errors
+/// Rejects malformed or empty format-2 envelopes and unsupported browser-only
+/// instrumentation. Does not execute any proof-of-work computation.
+pub fn preflight_capjs_format_two(challenge: &Value) -> anyhow::Result<()> {
+    capjs::preflight_format_two(challenge)
+}
+
 /// Per-worker peak heap allocation for supported memory-hard protocols.
 ///
 /// None means not memory-hard. Some(Err) means the challenge has invalid or

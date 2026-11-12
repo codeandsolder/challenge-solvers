@@ -27,6 +27,29 @@ cfg_if::cfg_if! {
 /// SHA-256 primitives
 mod sha256;
 
+/// Standard SHA-256 initial chaining state, shared with the service GPU adapter.
+pub use sha256::IV as SHA256_INITIAL_STATE;
+/// Standard SHA-256 round constants, shared with GPU shader generation.
+pub use sha256::K32 as SHA256_ROUND_CONSTANTS;
+
+/// Compress the complete 64-byte SHA-256 blocks of a message prefix.
+///
+/// The remaining partial block is intentionally left unprocessed: callers
+/// building nonce-dependent suffixes must supply their own SHA-256 padding.
+/// This function returns the chaining state, not a finalized SHA-256 digest.
+#[must_use]
+pub fn sha256_full_block_midstate(bytes: &[u8]) -> [u32; 8] {
+    let mut state = SHA256_INITIAL_STATE;
+    for block in bytes.as_chunks::<64>().0 {
+        let mut words = [0_u32; 16];
+        for (word, chunk) in words.iter_mut().zip(block.as_chunks::<4>().0) {
+            *word = u32::from_be_bytes(*chunk);
+        }
+        sha256::digest_block(&mut state, &words);
+    }
+    state
+}
+
 /// BLAKE3 primitives
 mod blake3;
 
@@ -211,23 +234,6 @@ pub fn build_mcaptcha_prefix<E: Extend<u8>>(out: &mut E, string: &str, salt: &st
     out.extend(string_len.to_le_bytes());
     out.extend(string.as_bytes().iter().copied());
     Some(())
-}
-
-/// Compute a plausible time for a SHA-256 `PoW` to prevent tainting metrics
-///
-/// # Arguments
-///
-/// * `hashes`: The number of hashes that have been computed
-///
-/// # Returns
-///
-/// The plausible time in milliseconds
-#[expect(
-    dead_code,
-    reason = "kept as the SHA-256 counterpart to the active plausibility estimators"
-)]
-pub(crate) const fn compute_plausible_time_sha256(hashes: u64) -> u64 {
-    hashes / 512
 }
 
 /// Compute the target for an mCaptcha `PoW`
