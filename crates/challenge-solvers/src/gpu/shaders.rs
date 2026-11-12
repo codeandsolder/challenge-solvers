@@ -1,7 +1,7 @@
 //! Protocol WGSL shader construction. Shader bodies are intentionally unchanged.
 use super::*;
 
-fn sha256_core_shader_source() -> String {
+pub fn sha256_core_shader_source() -> String {
     let mut rounds = String::new();
     for (t, k) in crate::sha256::K32.iter().enumerate() {
         let i = t & 15;
@@ -27,11 +27,11 @@ fn sha256_core_shader_source() -> String {
             ),
         );
     }
-    include_str!("shaders/sha256_core.wgsl").replace("__SHA256_ROUNDS__", &rounds)
+    include_str!("../shaders/sha256_core.wgsl").replace("__SHA256_ROUNDS__", &rounds)
 }
 
 pub fn altcha_shader_source() -> String {
-    include_str!("shaders/altcha.wgsl")
+    include_str!("../shaders/altcha.wgsl")
         .replace("__SHA256_CORE__", &sha256_core_shader_source())
         .replace("__WORKGROUP_SIZE__", &WG_SIZE.to_string())
 }

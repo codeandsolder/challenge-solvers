@@ -27,7 +27,7 @@ pub use solvers::{
 mod shaders;
 use shaders::{
     altcha_shader_source, cerberus_shader_source, generic_single_block_shader_source,
-    multi_layout_shader_source, shader_source,
+    multi_layout_shader_source, sha256_core_shader_source, shader_source,
 };
 
 use crate::{high_u32, low_u32};
