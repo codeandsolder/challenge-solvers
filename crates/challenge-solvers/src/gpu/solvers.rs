@@ -1,10 +1,9 @@
 //! Public SHA-256/BLAKE3 GPU protocol solver wrappers and ALTCHA proof verification.
 use super::{
-    Digest, Future, GpuContext, GpuError, GpuSolution, HASHES_PER_WG, Pod, Sha256, Vec, WG_SIZE,
-    Zeroable, be_words_4, be_words_8, be_words_16, binary_templates, expected_work,
-    expected_work_full64, gpu_batch_target, gpu_u32, gpu_usize_u32, high_u32, low_u32,
-    result_matches_full64, single_block_search_space, verify_binary, verify_cerberus,
-    verify_double_block, verify_goaway,
+    Digest, GpuContext, GpuError, GpuSolution, HASHES_PER_WG, Sha256, Vec, WG_SIZE, be_words_4,
+    be_words_8, be_words_16, binary_templates, expected_work, expected_work_full64,
+    gpu_batch_target, gpu_u32, gpu_usize_u32, high_u32, low_u32, result_matches_full64,
+    single_block_search_space, verify_binary, verify_cerberus, verify_double_block, verify_goaway,
 };
 
 /// Async GPU counterpart of the CPU single-block SHA-256 solver family.
