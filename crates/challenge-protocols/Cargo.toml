@@ -23,7 +23,6 @@ challenge-solvers = { path = "../challenge-solvers", default-features = false, f
 hashwx = { git = "https://github.com/codeandsolder/hashwx-rs", rev = "9c69f0f8a30d4528c46c39ce1972eea1cde8e177", default-features = false, features = ["native", "hashx"] }
 hex = "0.4"
 itoa = "1"
-num-bigint = "0.5"
 pbkdf2 = "0.13"
 scrypt = "0.12"
 scrypt-fast = { path = "../scrypt-fast" }
@@ -31,6 +30,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha1 = { version = "0.11", default-features = false }
 sha2 = "0.11"
+rug = { version = "1.30.0", default-features = false, features = ["integer", "std"] }
 
 [lints]
 workspace = true

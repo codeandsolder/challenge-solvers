@@ -7,7 +7,7 @@ use challenge_solvers::{
     message::{CapJSEmitter, DecimalMessage},
 };
 use hashwx::HashWx;
-use num_bigint::BigUint;
+use rug::Integer;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -160,32 +160,45 @@ fn solve_cap_v2_sha256(
     Ok((json!({ "nonce": nonce }), attempted))
 }
 
-/// Apply repeated modular squaring in bounded blocks.
+/// Parse protocol-defined unsigned hexadecimal integers without accepting signs,
+/// whitespace, prefixes or other formats not permitted by the Cap.js RSW wire format.
+fn parse_rsw_hex(text: &str) -> Option<Integer> {
+    if text.is_empty() || !text.bytes().all(|ch| ch.is_ascii_hexdigit()) {
+        return None;
+    }
+    Integer::from_str_radix(text, 16).ok()
+}
+
+/// Repeated modular squaring via GMP's native modular exponentiation.
 ///
-/// Each block is x^(2^k) mod N. num-bigint uses Montgomery arithmetic for
-/// odd moduli, avoiding an expensive division after every individual square.
-/// Bounded blocks prevent a large untrusted t from allocating a huge exponent.
-/// Even moduli retain correct results through num-bigint's general fallback.
-fn repeated_mod_squaring(mut value: BigUint, modulus: &BigUint, mut rounds: u32) -> BigUint {
+/// Every block represents exactly count consecutive squarings, as
+/// x^(2^count) mod N. Bound the exponent size independently of rounds.
+/// This remains correct for odd and even positive moduli of arbitrary size.
+fn repeated_mod_squaring(
+    mut value: Integer,
+    modulus: &Integer,
+    mut rounds: u32,
+) -> anyhow::Result<Integer> {
     const SQUARES_PER_BLOCK: u32 = 8_192;
-    value %= modulus;
+    value.modulo_mut(modulus);
     while rounds != 0 {
         let count = rounds.min(SQUARES_PER_BLOCK);
-        value = value.modpow(&(BigUint::from(1_u8) << count), modulus);
+        let exponent = Integer::from(1) << count;
+        value = value
+            .pow_mod(&exponent, modulus)
+            .map_err(|_| anyhow!("Cap.js RSW modular exponentiation failed"))?;
         rounds -= count;
     }
-    value
+    Ok(value)
 }
 
 fn solve_cap_v2_rsw(payload: &CapV2Rsw) -> anyhow::Result<Value> {
     ensure!(payload.t > 0, "Cap.js RSW iteration count must be positive");
-    let modulus = BigUint::parse_bytes(payload.modulus.as_bytes(), 16)
-        .context("invalid Cap.js RSW modulus")?;
-    let value =
-        BigUint::parse_bytes(payload.x.as_bytes(), 16).context("invalid Cap.js RSW input")?;
-    ensure!(modulus.bits() > 1, "Cap.js RSW modulus is too small");
-    let result = repeated_mod_squaring(value, &modulus, payload.t);
-    Ok(json!({ "y": result.to_str_radix(16) }))
+    let modulus = parse_rsw_hex(&payload.modulus).context("invalid Cap.js RSW modulus")?;
+    let value = parse_rsw_hex(&payload.x).context("invalid Cap.js RSW input")?;
+    ensure!(modulus > 1, "Cap.js RSW modulus is too small");
+    let result = repeated_mod_squaring(value, &modulus, payload.t)?;
+    Ok(json!({ "y": result.to_string_radix(16) }))
 }
 
 fn hashwx_seed(challenge: &[u8; 32], block: u64) -> [u8; 32] {
@@ -491,26 +504,39 @@ mod tests {
     }
 
     #[test]
-    fn rsw_montgomery_blocks_match_direct_squaring() {
-        // Exercise both num-bigint's odd-modulus Montgomery path and its
-        // even-modulus fallback. Include boundary-crossing counts and x >= N.
-        for bits in [2_usize, 32, 64, 129, 1024, 2048] {
+    fn rsw_native_blocks_match_direct_squaring() -> anyhow::Result<()> {
+        // Full 8,192-square block boundary, even moduli, odd moduli, and
+        // unreduced inputs. The oracle uses a distinct GMP operation sequence.
+        for bits in [2_u32, 32, 64, 129, 1024, 2048] {
             for offset in [1_u8, 2_u8] {
-                let modulus = (BigUint::from(1_u8) << bits) - BigUint::from(offset);
+                let modulus = (Integer::from(1) << bits) - Integer::from(offset);
                 for rounds in [0_u32, 1, 2, 17, 129, 8_192, 8_193] {
-                    let input = &modulus + BigUint::from(7_u8);
-                    let mut expected = &input % &modulus;
-                    for _ in 0..rounds {
-                        expected = (&expected * &expected) % &modulus;
+                    for input in [Integer::from(0), Integer::from(1), &modulus + 7] {
+                        let mut expected = input.clone();
+                        expected.modulo_mut(&modulus);
+                        for _ in 0..rounds {
+                            expected.square_mut();
+                            expected.modulo_mut(&modulus);
+                        }
+                        assert_eq!(
+                            repeated_mod_squaring(input, &modulus, rounds)?,
+                            expected,
+                            "bits={bits} offset={offset} rounds={rounds}"
+                        );
                     }
-                    assert_eq!(
-                        repeated_mod_squaring(input, &modulus, rounds),
-                        expected,
-                        "bits={bits} offset={offset} rounds={rounds}"
-                    );
                 }
             }
         }
+        Ok(())
+    }
+
+    #[test]
+    fn rsw_unsigned_hex_rejects_non_wire_formats() {
+        for invalid in ["", "-2", "+2", " 2", "0x2", "2_", "GG"] {
+            assert!(parse_rsw_hex(invalid).is_none(), "{invalid}");
+        }
+        assert_eq!(parse_rsw_hex("000f"), Some(Integer::from(15)));
+        assert_eq!(parse_rsw_hex("ABC"), Some(Integer::from(0xABC)));
     }
 
     #[test]
