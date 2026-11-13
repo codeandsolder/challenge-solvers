@@ -20,9 +20,11 @@ pub use scrypt::{ScryptKdfGpu, ScryptRomixGpu};
 
 mod solvers;
 pub use solvers::{
-    AltchaSha256Solver, BinarySolver, CerberusSolver, DecimalSolver, DoubleBlockSolver,
-    GoAwaySolver, SingleBlockSolver,
+    BinarySolver, CerberusSolver, DecimalSolver, DoubleBlockSolver, GoAwaySolver, SingleBlockSolver,
 };
+
+mod altcha_sha256;
+pub use altcha_sha256::AltchaSha256Solver;
 
 mod shaders;
 use shaders::sha256_core_shader_source;
