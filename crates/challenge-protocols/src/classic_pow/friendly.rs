@@ -170,7 +170,7 @@ pub fn suggested_workers(challenge: &Value, available: usize) -> Option<usize> {
     Some(worthwhile.min(usize::from(puzzle.solutions)).min(available))
 }
 
-/// Expected independent BLAKE2b candidates in a valid Friendly v1 puzzle.
+/// Expected independent candidate-hash evaluations for a valid Friendly v1 puzzle.
 /// Used by automatic GPU placement to avoid routing malformed puzzle envelopes.
 #[cfg(feature = "gpu")]
 pub(super) fn auto_gpu_expected_work(challenge: &Value) -> Option<u128> {
