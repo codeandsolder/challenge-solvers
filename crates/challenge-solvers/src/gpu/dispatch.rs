@@ -149,13 +149,13 @@ impl GpuContext {
     /// Other independent solver pipelines can use the same logical device,
     /// retaining their own buffers while avoiding a second device request.
     #[must_use]
-    pub fn device(&self) -> &wgpu::Device {
+    pub const fn device(&self) -> &wgpu::Device {
         &self.device
     }
 
     /// Borrow the queue associated with this GPU device.
     #[must_use]
-    pub fn queue(&self) -> &wgpu::Queue {
+    pub const fn queue(&self) -> &wgpu::Queue {
         &self.queue
     }
 
