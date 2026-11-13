@@ -839,6 +839,22 @@ impl Emitter {
         self.xor64_reg(dlo, dhi, alo, ahi, guard);
         self.ror64(clo, chi, 32, guard);
     }
+    /// In the final `SipRound` only word zero reaches the 64-bit `HashX`
+    /// output. Preserve its complete dependency cone and omit dead writes.
+    fn sip_first_word(&mut self, regs: [u8; 4], guard: Pred) {
+        let [a, b, c, d] = regs;
+        let (alo, ahi) = pair(a);
+        let (blo, bhi) = pair(b);
+        let (clo, chi) = pair(c);
+        let (dlo, dhi) = pair(d);
+        self.add64_reg(alo, ahi, blo, bhi, guard);
+        self.add64_reg(clo, chi, dlo, dhi, guard);
+        self.ror64(dlo, dhi, 64 - 16, guard);
+        self.xor64_reg(dlo, dhi, clo, chi, guard);
+        self.ror64(alo, ahi, 32, guard);
+        self.add64_reg(alo, ahi, dlo, dhi, guard);
+    }
+
     fn op_instr(&mut self, ins: &Instr, guard: Pred) -> anyhow::Result<()> {
         let d = u8::try_from(ins.dst).context("HashX destination register exceeds u8")?;
         let src = u8::try_from(ins.src).context("HashX source register exceeds u8")?;
@@ -921,11 +937,28 @@ const fn split_u64(value: u64) -> (u32, u32) {
     )
 }
 
+#[cfg(test)]
+fn generate(source: &GpuProgram) -> anyhow::Result<Vec<u128>> {
+    generate_with_block_size(source, 32)
+}
+
+fn generate_with_block_size(source: &GpuProgram, block_size: u32) -> anyhow::Result<Vec<u128>> {
+    generate_with_options(source, block_size, false)
+}
+
 #[expect(
     clippy::too_many_lines,
-    reason = "the generated SASS instruction stream is intentionally linear for instruction-order auditability"
+    reason = "generated SASS program is linear and has audited instruction ordering"
 )]
-fn generate(source: &GpuProgram) -> anyhow::Result<Vec<u128>> {
+fn generate_with_options(
+    source: &GpuProgram,
+    block_size: u32,
+    partial_finalizer: bool,
+) -> anyhow::Result<Vec<u128>> {
+    anyhow::ensure!(
+        matches!(block_size, 32 | 64 | 128 | 256 | 512),
+        "unsupported block size"
+    );
     let key = source.key();
     let program = source.instructions();
     let mut e = Emitter::new();
@@ -982,7 +1015,7 @@ fn generate(source: &GpuProgram) -> anyhow::Result<Vec<u128>> {
         r(3),
         None,
         r(5),
-        Src1::Imm(32),
+        Src1::Imm(block_size),
         r(3),
         None,
         Pred::PT,
@@ -1088,8 +1121,13 @@ fn generate(source: &GpuProgram) -> anyhow::Result<Vec<u128>> {
     e.add64_const(pair(1).0, pair(1).1, key[1], Pred::PT);
     e.add64_const(pair(6).0, pair(6).1, key[2], Pred::PT);
     e.add64_const(pair(7).0, pair(7).1, key[3], Pred::PT);
-    e.sip([0, 1, 2, 3], Pred::PT);
-    e.sip([4, 5, 6, 7], Pred::PT);
+    if partial_finalizer {
+        e.sip_first_word([0, 1, 2, 3], Pred::PT);
+        e.sip_first_word([4, 5, 6, 7], Pred::PT);
+    } else {
+        e.sip([0, 1, 2, 3], Pred::PT);
+        e.sip([4, 5, 6, 7], Pred::PT);
+    }
     e.mov(26, Src1::Reg(r(pair(0).0)), Pred::PT);
     e.mov(27, Src1::Reg(r(pair(0).1)), Pred::PT);
     e.lop(26, 26, Src1::Reg(r(pair(4).0)), 0x3c, Pred::PT);
@@ -1144,11 +1182,30 @@ pub fn template_solve_cubin() -> Vec<u8> {
 }
 
 pub fn build_solve_cubin(program: &GpuProgram) -> anyhow::Result<Vec<u8>> {
+    build_solve_cubin_with_block_size(program, 32)
+}
+
+/// Construct a per-program kernel with an explicit CUDA block size.
+pub(crate) fn build_solve_cubin_with_block_size(
+    program: &GpuProgram,
+    block_size: u32,
+) -> anyhow::Result<Vec<u8>> {
     anyhow::ensure!(
         TEMPLATE.len() >= TEXT_OFFSET + TEXT_SIZE,
         "embedded sm_75 cubin template is truncated"
     );
-    let words = generate(program)?;
+    let words = generate_with_block_size(program, block_size)?;
+    let mut cubin = TEMPLATE.to_vec();
+    patch_words(&mut cubin, &words);
+    Ok(cubin)
+}
+
+#[cfg(test)]
+pub(crate) fn build_partial_finalizer_cubin(
+    program: &GpuProgram,
+    block_size: u32,
+) -> anyhow::Result<Vec<u8>> {
+    let words = generate_with_options(program, block_size, true)?;
     let mut cubin = TEMPLATE.to_vec();
     patch_words(&mut cubin, &words);
     Ok(cubin)
