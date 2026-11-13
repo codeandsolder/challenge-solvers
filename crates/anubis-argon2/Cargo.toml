@@ -11,7 +11,7 @@ publish = false
 blake2 = { version = "0.11", default-features = false }
 
 [dev-dependencies]
-argon2 = { path = "../../vendor/argon2-fast" }
+argon2 = "0.6.0"
 
 [lints]
 workspace = true

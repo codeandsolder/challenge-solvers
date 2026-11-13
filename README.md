@@ -15,9 +15,10 @@ cryptographic search machinery extracted from
 - [challenge-hashx](crates/challenge-hashx) — standalone HashX challenge verification, native JIT and optional Vulkan/SM75 CUDA backends (without the HTTP service).
 - [anubis-argon2](crates/anubis-argon2) — specialized Anubis Argon2id
   computation and tests.
-- [vendor/argon2-fast](vendor/argon2-fast) — locally modified Argon2 reference
-  dependency used by the generic ALTCHA Argon2id adapter and Anubis differential tests. Licensing and
-  upstream attribution are retained with the source.
+- ALTCHA Argon2id uses the published [argon2-rust](https://github.com/Brooooooklyn/argon2-rust)
+  backend with an allocated-once reusable arena and one internal thread per
+  reserved service worker; Anubis Argon2id stays specialized in-tree.
+  Independent RustCrypto Argon2 remains a test-only reference for both engines.
 
 The workspace retains the original source history (imported as Git subtrees).
 See individual packages for features and backends. The HTTP service,

@@ -10,9 +10,10 @@ use std::{
 };
 
 use anyhow::{Context, bail, ensure};
-use argon2::{
-    Algorithm as Argon2Algorithm, Argon2, Block as Argon2Block, Params as Argon2Params,
+use argon2_rust::{
+    Algorithm as Argon2Algorithm, Argon2, Hasher as Argon2Hasher, Params as Argon2Params,
     Version as Argon2Version,
+    params::{Memory as Argon2Memory, TagLen as Argon2TagLen},
 };
 #[cfg(feature = "gpu")]
 use challenge_solvers::gpu::{AltchaSha64Algorithm, AltchaSha64GpuSolver};
@@ -405,34 +406,49 @@ impl AltchaScryptWorker {
     }
 }
 
+/// Match the reference Argon2id parameter semantics, but constrain its
+/// physical thread budget to the single CPU permit reserved per nonce worker.
+fn altcha_argon2_parameters(
+    parameters: &AltchaChallengeParameters,
+) -> anyhow::Result<Argon2Params> {
+    Argon2Params::builder()
+        .memory(Argon2Memory::kib(u64::from(
+            parameters
+                .memory_cost
+                .context("ALTCHA Argon2id requires memoryCost")?,
+        )))
+        .passes(parameters.cost)
+        .lanes(parameters.parallelism.unwrap_or(1))
+        .threads(1)
+        .tag_len(Argon2TagLen::bytes(u64::try_from(parameters.key_length)?))
+        .build()
+        .context("invalid ALTCHA Argon2id parameters")
+}
+
 struct AltchaArgon2Worker {
-    argon2: Argon2<'static>,
-    memory: Vec<Argon2Block>,
+    hasher: Argon2Hasher,
     output: Vec<u8>,
 }
 
 impl AltchaArgon2Worker {
     fn new(parameters: &AltchaChallengeParameters) -> anyhow::Result<Self> {
-        let params = Argon2Params::new(
-            parameters
-                .memory_cost
-                .context("ALTCHA Argon2id requires memoryCost")?,
-            parameters.cost,
-            parameters.parallelism.unwrap_or(1),
-            Some(parameters.key_length),
-        )
-        .context("invalid ALTCHA Argon2id parameters")?;
-        let memory = vec![Argon2Block::default(); params.block_count()];
+        let params = altcha_argon2_parameters(parameters)?;
+        let mut hasher =
+            Argon2::new(Argon2Algorithm::Argon2id, Argon2Version::V0x13, params).hasher();
+        // Preserve the previous upfront allocation behavior. This allocation
+        // occurs only after the service has acquired its KDF-memory reservation.
+        hasher
+            .reserve()
+            .context("ALTCHA Argon2id arena allocation failed")?;
         Ok(Self {
-            argon2: Argon2::new(Argon2Algorithm::Argon2id, Argon2Version::V0x13, params),
-            memory,
+            hasher,
             output: vec![0; parameters.key_length],
         })
     }
 
     fn derive(&mut self, password: &[u8], salt: &[u8]) -> anyhow::Result<&[u8]> {
-        self.argon2
-            .hash_password_into_with_memory(password, salt, &mut self.output, &mut self.memory)
+        self.hasher
+            .hash_into(password, salt, &mut self.output)
             .context("ALTCHA Argon2id derivation failed")?;
         Ok(&self.output)
     }
@@ -448,15 +464,8 @@ pub(super) fn memory_requirement(challenge: &Value) -> Option<anyhow::Result<u64
             serde_json::from_value(challenge.clone()).context("invalid ALTCHA KDF challenge")?;
         let p = parsed.parameters;
         if algorithm.eq_ignore_ascii_case("ARGON2ID") {
-            let params = Argon2Params::new(
-                p.memory_cost
-                    .context("ALTCHA Argon2id requires memoryCost")?,
-                p.cost,
-                p.parallelism.unwrap_or(1),
-                Some(p.key_length),
-            )
-            .context("invalid ALTCHA Argon2id parameters")?;
-            let arena = u64::try_from(params.block_count())?
+            let params = altcha_argon2_parameters(&p)?;
+            let arena = u64::from(params.memory_blocks())
                 .checked_mul(1024)
                 .context("ALTCHA Argon2id arena size overflow")?;
             return arena
@@ -1120,8 +1129,29 @@ mod tests {
                 salt: "01".repeat(16),
             };
             let mut worker = AltchaArgon2Worker::new(&parameters)?;
-            let params = Argon2Params::new(memory_kib, passes, lanes, Some(key_length))?;
-            let reference = Argon2::new(Argon2Algorithm::Argon2id, Argon2Version::V0x13, params);
+            let expected_blocks =
+                argon2::Params::new(memory_kib, passes, lanes, Some(key_length))?.block_count();
+            assert_eq!(worker.hasher.reserved_blocks(), expected_blocks);
+            assert_eq!(worker.hasher.params().threads(), 1);
+            let wire = json!({"parameters": {
+                "algorithm": "ARGON2ID",
+                "cost": passes,
+                "memoryCost": memory_kib,
+                "parallelism": lanes,
+                "keyLength": key_length,
+                "nonce": parameters.nonce,
+                "salt": parameters.salt,
+                "keyPrefix": ""
+            }});
+            let reserved = crate::classic_pow::memory_hard_requirement("altcha", &wire)
+                .context("ALTCHA memory reservation missing")??;
+            assert_eq!(
+                reserved,
+                u64::try_from(expected_blocks)? * 1024 + u64::try_from(key_length)?
+            );
+            let params = argon2::Params::new(memory_kib, passes, lanes, Some(key_length))?;
+            let reference =
+                argon2::Argon2::new(argon2::Algorithm::Argon2id, argon2::Version::V0x13, params);
             for (password, salt) in [
                 (&b"sample-1"[..], &b"salt1234"[..]),
                 (&b"reused-arena-2"[..], &b"longer-salt-value"[..]),
