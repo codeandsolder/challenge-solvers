@@ -7,6 +7,9 @@ use std::{string::String, vec::Vec};
 
 use bytemuck::{Pod, Zeroable};
 
+mod friendly_blake2b;
+pub use friendly_blake2b::FriendlyBlake2bGpu;
+
 mod linear_sha1;
 pub use linear_sha1::{LinearSha1GpuSolver, LinearSha1Solution};
 mod sha1_decimal;
