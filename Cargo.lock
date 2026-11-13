@@ -34,11 +34,22 @@ checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
 [[package]]
 name = "argon2"
 version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "134c52ddac6d63c576bef8168db10c83c49c26444ecbc68060fef078925a901c"
 dependencies = [
  "base64ct",
  "blake2 0.11.0",
  "cpufeatures",
  "password-hash",
+]
+
+[[package]]
+name = "argon2-rust"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9116a9e4fd543b4e7ae219c3d7f1259b59615105c0c27b3d75939a8b8cf8af86"
+dependencies = [
+ "memchr",
 ]
 
 [[package]]
@@ -244,6 +255,7 @@ dependencies = [
  "anubis-argon2",
  "anyhow",
  "argon2",
+ "argon2-rust",
  "base64",
  "blake2 0.11.0",
  "challenge-solvers",

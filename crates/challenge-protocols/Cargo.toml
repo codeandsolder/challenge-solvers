@@ -17,7 +17,7 @@ blake2 = { version = "0.11", default-features = false }
 equix = "0.8"
 getrandom = "0.3"
 num-traits = "0.2"
-argon2 = { path = "../../vendor/argon2-fast" }
+argon2-rust = { version = "1.1.0", default-features = false, features = ["std"] }
 anubis-argon2 = { path = "../anubis-argon2" }
 challenge-solvers = { path = "../challenge-solvers", default-features = false, features = ["std", "runtime-dispatch", "all-challenges"] }
 hashwx = { git = "https://github.com/codeandsolder/hashwx-rs", rev = "9c69f0f8a30d4528c46c39ce1972eea1cde8e177", default-features = false, features = ["native", "hashx"] }
@@ -31,6 +31,9 @@ serde_json = "1"
 sha1 = { version = "0.11", default-features = false }
 sha2 = "0.11"
 rug = { version = "1.30.0", default-features = false, features = ["integer", "std"] }
+
+[dev-dependencies]
+argon2 = "0.6.0"
 
 [lints]
 workspace = true
