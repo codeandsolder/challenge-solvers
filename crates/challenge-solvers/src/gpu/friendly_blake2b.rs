@@ -190,6 +190,10 @@ mod tests {
         assert!(gpu.altcha_sha64_pipeline.get().is_some());
 
         let started = Instant::now();
+        super::super::sha512_tests::block_on(gpu.preload_and_warm_protocol_pipelines())?;
+        let warm_dispatch_ms = started.elapsed().as_secs_f64() * 1e3;
+
+        let started = Instant::now();
         gpu.preload_protocol_pipelines();
         let second_preload_us = started.elapsed().as_secs_f64() * 1e6;
 
@@ -202,7 +206,7 @@ mod tests {
         }
         times.sort_by(f64::total_cmp);
         println!(
-            "FRIENDLY_GPU_CACHE {{\"preload_all_ms\":{preload_ms:.5},\"repeat_preload_us\":{second_preload_us:.5},\"friendly_instance_median_us\":{:.5}}}",
+            "FRIENDLY_GPU_CACHE {{\"preload_all_ms\":{preload_ms:.5},\"first_dispatch_ms\":{warm_dispatch_ms:.5},\"repeat_preload_us\":{second_preload_us:.5},\"friendly_instance_median_us\":{:.5}}}",
             times[times.len() / 2]
         );
         Ok(())
