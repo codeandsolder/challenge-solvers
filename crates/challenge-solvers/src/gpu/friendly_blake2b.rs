@@ -68,6 +68,12 @@ impl<'a> FriendlyBlake2bGpu<'a> {
         })
     }
 
+    /// Maximum candidates accepted in one GPU dispatch.
+    #[must_use]
+    pub fn batch_capacity(&self) -> u64 {
+        u64::from(self.gpu.max_wgs) * u64::from(WG_SIZE)
+    }
+
     /// Evaluate an exact fixed-size work window from one solution bank.
     /// Returned nonce is any matching candidate, not necessarily the lowest.
     /// Threshold zero runs a fixed-work no-solution benchmark.
