@@ -341,8 +341,8 @@ mod tests {
     #[cfg(feature = "gpu")]
     fn block_on_test<F: std::future::Future>(future: F) -> F::Output {
         use std::{
-            sync::{Arc, Wake, Waker},
-            task::{Context, Poll},
+            sync::Arc,
+            task::{Context, Poll, Wake, Waker},
         };
 
         struct ThreadWaker(std::thread::Thread);
