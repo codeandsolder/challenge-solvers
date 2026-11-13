@@ -360,7 +360,7 @@ pub(super) async fn solve_gpu(gpu: &GpuContext, challenge: Value) -> anyhow::Res
     );
     Ok(finish(
         &puzzle,
-        &solutions,
+        &bytes,
         attempts,
         started,
         "wgpu-blake2b-256",
