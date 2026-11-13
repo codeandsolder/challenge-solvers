@@ -115,7 +115,7 @@ impl GpuContext {
         }
     }
 
-    /// Prepare optional protocol pipelines and exercise the Friendly BLAKE2b
+    /// Prepare optional protocol pipelines and exercise the Friendly `BLAKE2b`
     /// compute kernel once, so the driver compiles its actual executable
     /// before the first real Friendly challenge arrives.
     ///
