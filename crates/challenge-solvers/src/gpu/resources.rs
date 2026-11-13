@@ -417,6 +417,7 @@ impl GpuContext {
             linear_sha1_pipeline: std::sync::OnceLock::new(),
             sha1_decimal_pipeline: std::sync::OnceLock::new(),
             altcha_sha64_pipeline: std::sync::OnceLock::new(),
+            friendly_blake2b_pipeline: std::sync::OnceLock::new(),
             generic_in_buf: buffers.generic_input,
             out_buf: buffers.output,
             staging: buffers.staging,

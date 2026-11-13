@@ -18,12 +18,27 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use super::{Implementation, Result};
+#[cfg(feature = "gpu")]
+use challenge_solvers::gpu::{FriendlyBlake2bGpu, GpuContext};
 
 #[derive(Deserialize)]
 #[serde(untagged)]
 enum PuzzleInput {
     Encoded(String),
     Object { puzzle: String },
+}
+
+impl PuzzleInput {
+    fn encoded(&self) -> &str {
+        match self {
+            Self::Encoded(puzzle) | Self::Object { puzzle } => puzzle,
+        }
+    }
+}
+
+fn request(challenge: Value) -> anyhow::Result<PuzzleInput> {
+    serde_json::from_value(challenge)
+        .context("Friendly Captcha request must be a puzzle string or {puzzle: string}")
 }
 
 struct Puzzle<'a> {
@@ -155,6 +170,16 @@ pub fn suggested_workers(challenge: &Value, available: usize) -> Option<usize> {
     Some(worthwhile.min(usize::from(puzzle.solutions)).min(available))
 }
 
+/// Expected independent candidate-hash evaluations for a valid Friendly v1 puzzle.
+/// Used by automatic GPU placement to avoid routing malformed puzzle envelopes.
+#[cfg(feature = "gpu")]
+pub(super) fn auto_gpu_expected_work(challenge: &Value) -> Option<u128> {
+    let request = request(challenge.clone()).ok()?;
+    let puzzle = parse(request.encoded()).ok()?;
+    let expected_per_bank = (u128::from(u32::MAX) + 1).div_ceil(u128::from(puzzle.threshold));
+    Some(u128::from(puzzle.solutions) * expected_per_bank)
+}
+
 pub(super) fn solve(
     challenge: Value,
     implementation: Implementation,
@@ -164,13 +189,8 @@ pub(super) fn solve(
         matches!(implementation, Implementation::Auto | Implementation::Safe),
         "Friendly Captcha BLAKE2b supports only auto and safe CPU implementations"
     );
-    let request: PuzzleInput = serde_json::from_value(challenge)
-        .context("Friendly Captcha request must be a puzzle string or {puzzle: string}")?;
-    let encoded = match &request {
-        PuzzleInput::Encoded(encoded) => encoded,
-        PuzzleInput::Object { puzzle } => puzzle,
-    };
-    let puzzle = parse(encoded)?;
+    let request = request(challenge)?;
+    let puzzle = parse(request.encoded())?;
     let started = Instant::now();
     ensure!(
         worker_count > 0,
@@ -223,30 +243,136 @@ pub(super) fn solve(
             .checked_add(count)
             .context("Friendly Captcha attempt count overflow")?;
     }
+    Ok(finish(
+        &puzzle,
+        &bytes,
+        attempts,
+        started,
+        "rustcrypto-blake2b",
+    ))
+}
+
+fn finish(
+    puzzle: &Puzzle<'_>,
+    solutions: &[u8],
+    attempted_nonces: u64,
+    started: Instant,
+    implementation: &str,
+) -> Result {
     let elapsed = started.elapsed();
     let seconds = u16::try_from(elapsed.as_secs()).unwrap_or(u16::MAX);
-    let diagnostics = diagnostics(seconds);
     let response = format!(
         "{}.{}.{}.{}",
         puzzle.signature,
         puzzle.encoded,
-        STANDARD.encode(&bytes),
-        STANDARD.encode(diagnostics)
+        STANDARD.encode(solutions),
+        STANDARD.encode(diagnostics(seconds))
     );
-    Ok(Result {
+    Result {
         answer: json!({
             "response": response,
-            "attempted_nonces": attempts,
+            "attempted_nonces": attempted_nonces,
             "solution_count": puzzle.solutions,
         }),
         solve_ms: elapsed.as_secs_f64() * 1000.0,
-        implementation: "rustcrypto-blake2b".to_owned(),
-    })
+        implementation: implementation.to_owned(),
+    }
+}
+
+/// Search every independent Friendly Captcha v1 bank on the GPU.
+/// GPU attempt count is the upper bound of submitted candidates, not
+/// the exact number of threads that evaluated a candidate.
+///
+/// # Errors
+/// Rejects malformed puzzles, incompatible devices, exhausted nonce domains
+/// and independently unverified GPU proof candidates.
+#[cfg(feature = "gpu")]
+pub(super) async fn solve_gpu(gpu: &GpuContext, challenge: Value) -> anyhow::Result<Result> {
+    let request = request(challenge)?;
+    let puzzle = parse(request.encoded())?;
+    let started = Instant::now();
+    let solver = FriendlyBlake2bGpu::new(gpu)?;
+    let mut solutions = Vec::with_capacity(usize::from(puzzle.solutions) * 8);
+    let mut attempts = 0u64;
+    let batch_capacity = solver.batch_capacity().min(262_144);
+    ensure!(
+        batch_capacity > 0,
+        "Friendly GPU cannot submit any candidates"
+    );
+    let domain = u64::from(u32::MAX) + 1;
+    for bank in 0..puzzle.solutions {
+        let mut base = 0u64;
+        loop {
+            ensure!(base < domain, "Friendly GPU exhausted nonce bank {bank}");
+            let count = u32::try_from((domain - base).min(batch_capacity))?;
+            let found = solver
+                .scan(
+                    &puzzle.padded,
+                    bank,
+                    u32::try_from(base)?,
+                    count,
+                    puzzle.threshold,
+                )
+                .await?;
+            attempts = attempts
+                .checked_add(u64::from(count))
+                .context("Friendly GPU dispatched nonce count overflow")?;
+            if let Some(nonce) = found {
+                let mut input = puzzle.padded;
+                input[120] = bank;
+                input[124..128].copy_from_slice(&nonce.to_le_bytes());
+                ensure!(
+                    matches(&input, puzzle.threshold),
+                    "Friendly GPU returned a BLAKE2b-256 nonce rejected by RustCrypto"
+                );
+                solutions.extend_from_slice(&input[120..128]);
+                break;
+            }
+            base += u64::from(count);
+        }
+    }
+    ensure!(
+        verify(request.encoded(), &solutions)?,
+        "Friendly GPU complete proof failed independent RustCrypto verification"
+    );
+    Ok(finish(
+        &puzzle,
+        &solutions,
+        attempts,
+        started,
+        "wgpu-blake2b-256",
+    ))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(feature = "gpu")]
+    fn block_on_test<F: std::future::Future>(future: F) -> F::Output {
+        use std::{
+            sync::Arc,
+            task::{Context, Poll, Wake, Waker},
+        };
+
+        struct ThreadWaker(std::thread::Thread);
+        impl Wake for ThreadWaker {
+            fn wake(self: Arc<Self>) {
+                self.0.unpark();
+            }
+            fn wake_by_ref(self: &Arc<Self>) {
+                self.0.unpark();
+            }
+        }
+        let waker = Waker::from(Arc::new(ThreadWaker(std::thread::current())));
+        let mut future = std::pin::pin!(future);
+        loop {
+            match future.as_mut().poll(&mut Context::from_waker(&waker)) {
+                Poll::Ready(result) => return result,
+                Poll::Pending => std::thread::park_timeout(std::time::Duration::from_millis(100)),
+            }
+        }
+    }
 
     fn make_puzzle(difficulty: u8, count: u8, extra: usize) -> String {
         let mut bytes = vec![0_u8; 32 + extra];
@@ -255,6 +381,82 @@ mod tests {
         bytes[15] = difficulty;
         bytes[24..32].copy_from_slice(b"nonce123");
         format!("fixture.{}", STANDARD.encode(bytes))
+    }
+
+    #[cfg(feature = "gpu")]
+    #[test]
+    #[ignore = "requires physical Vulkan GPU with SHADER_INT64"]
+    fn friendly_gpu_full_protocol_roundtrip_and_cpu_latency() -> anyhow::Result<()> {
+        use std::hint::black_box;
+
+        let gpu = block_on_test(GpuContext::create())?;
+        for (difficulty, count, extra) in [(80, 1, 0), (112, 3, 11), (128, 16, 32)] {
+            let original = make_puzzle(difficulty, count, extra);
+            let challenge = json!({"puzzle": original});
+            let started = Instant::now();
+            let gpu_result = block_on_test(solve_gpu(&gpu, challenge.clone()))?;
+            let gpu_ms = started.elapsed().as_secs_f64() * 1e3;
+            let response = gpu_result.answer["response"]
+                .as_str()
+                .context("GPU response missing")?;
+            let fields: Vec<_> = response.split('.').collect();
+            ensure!(fields.len() == 4, "unexpected Friendly response parts");
+            let proof = STANDARD.decode(fields[2])?;
+            ensure!(
+                verify(&original, &proof)?,
+                "Friendly GPU complete proof invalid"
+            );
+            for (bank, nonce) in proof.chunks_exact(8).enumerate() {
+                ensure!(usize::from(nonce[0]) == bank, "unexpected Friendly bank");
+                ensure!(nonce[1..4] == [0, 0, 0], "incorrect reserved nonce bytes");
+            }
+            println!(
+                "FRIENDLY_GPU_FULL {{\"difficulty\":{difficulty},\"banks\":{count},\"gpu_ms\":{gpu_ms},\"solve_ms\":{},\"attempted\":{}}}",
+                gpu_result.solve_ms, gpu_result.answer["attempted_nonces"]
+            );
+            if count == 16 {
+                // Pair on the same fixture and same hardware. Each proof is
+                // checked independently; no requirement to find the same nonce.
+                for trial in 0..5 {
+                    let started = Instant::now();
+                    let gpu_result = block_on_test(solve_gpu(&gpu, challenge.clone()))?;
+                    let gpu_ms = started.elapsed().as_secs_f64() * 1e3;
+                    let encoded = gpu_result.answer["response"]
+                        .as_str()
+                        .context("GPU response missing")?;
+                    let proof = STANDARD.decode(
+                        encoded
+                            .split('.')
+                            .nth(2)
+                            .context("GPU response fields missing")?,
+                    )?;
+                    ensure!(verify(&original, &proof)?, "GPU proof invalid");
+                    println!(
+                        "FRIENDLY_GPU_E2E {{\"difficulty\":{difficulty},\"banks\":{count},\"trial\":{trial},\"gpu_ms\":{gpu_ms}}}"
+                    );
+                    for workers in [1, 2, 4] {
+                        let started = Instant::now();
+                        let cpu =
+                            black_box(solve(challenge.clone(), Implementation::Auto, workers)?);
+                        let cpu_ms = started.elapsed().as_secs_f64() * 1e3;
+                        let response = cpu.answer["response"]
+                            .as_str()
+                            .context("CPU response missing")?;
+                        let proof = STANDARD.decode(
+                            response
+                                .split('.')
+                                .nth(2)
+                                .context("CPU response fields missing")?,
+                        )?;
+                        ensure!(verify(&original, &proof)?, "CPU proof invalid");
+                        println!(
+                            "FRIENDLY_CPU_E2E {{\"difficulty\":{difficulty},\"banks\":{count},\"trial\":{trial},\"workers\":{workers},\"cpu_ms\":{cpu_ms}}}"
+                        );
+                    }
+                }
+            }
+        }
+        Ok(())
     }
 
     #[test]

@@ -358,29 +358,7 @@ impl AltchaSha64GpuSolver {
                 "selected GPU device has no SHADER_INT64 feature",
             ));
         }
-        let pipeline = gpu.altcha_sha64_pipeline.get_or_init(|| {
-            let source = format!(
-                "{}\n{}",
-                include_str!("../shaders/sha512_core.wgsl"),
-                include_str!("../shaders/altcha_sha512.wgsl")
-                    .replace("__WG__", &WG_SIZE.to_string())
-            );
-            let shader = gpu
-                .device
-                .create_shader_module(wgpu::ShaderModuleDescriptor {
-                    label: Some("altcha-sha512"),
-                    source: wgpu::ShaderSource::Wgsl(Cow::Owned(source)),
-                });
-            gpu.device
-                .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                    label: Some("altcha-sha512"),
-                    layout: None,
-                    module: &shader,
-                    entry_point: Some("solve"),
-                    compilation_options: wgpu::PipelineCompilationOptions::default(),
-                    cache: None,
-                })
-        });
+        let pipeline = gpu.cached_altcha_sha64_pipeline();
         let max_domain = if self.decimal_counter {
             1_u64 << 53
         } else {
@@ -420,6 +398,35 @@ impl AltchaSha64GpuSolver {
             base += batch;
         }
         Ok(None)
+    }
+}
+
+impl GpuContext {
+    /// Compile this optional protocol pipeline once and retain it on the GPU context.
+    pub(super) fn cached_altcha_sha64_pipeline(&self) -> &wgpu::ComputePipeline {
+        self.altcha_sha64_pipeline.get_or_init(|| {
+            let source = format!(
+                "{}\n{}",
+                include_str!("../shaders/sha512_core.wgsl"),
+                include_str!("../shaders/altcha_sha512.wgsl")
+                    .replace("__WG__", &WG_SIZE.to_string())
+            );
+            let shader = self
+                .device
+                .create_shader_module(wgpu::ShaderModuleDescriptor {
+                    label: Some("altcha-sha512"),
+                    source: wgpu::ShaderSource::Wgsl(Cow::Owned(source)),
+                });
+            self.device
+                .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                    label: Some("altcha-sha512"),
+                    layout: None,
+                    module: &shader,
+                    entry_point: Some("solve"),
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                    cache: None,
+                })
+        })
     }
 }
 

@@ -155,27 +155,7 @@ impl LinearSha1GpuSolver {
         &mut self,
         gpu: &GpuContext,
     ) -> Result<Option<LinearSha1Solution>, GpuError> {
-        let pipeline = gpu.linear_sha1_pipeline.get_or_init(|| {
-            let shader = gpu
-                .device
-                .create_shader_module(wgpu::ShaderModuleDescriptor {
-                    label: Some("linear-sha1"),
-                    source: wgpu::ShaderSource::Wgsl(Cow::Owned(format!(
-                        "{}\n{}",
-                        include_str!("../shaders/sha1_core.wgsl"),
-                        include_str!("../shaders/linear_sha1.wgsl")
-                    ))),
-                });
-            gpu.device
-                .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                    label: Some("linear-sha1"),
-                    layout: None,
-                    module: &shader,
-                    entry_point: Some("solve"),
-                    compilation_options: wgpu::PipelineCompilationOptions::default(),
-                    cache: None,
-                })
-        });
+        let pipeline = gpu.cached_linear_sha1_pipeline();
         let params = gpu.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("linear-sha1-params"),
             size: 14 * 4,
@@ -203,6 +183,33 @@ impl LinearSha1GpuSolver {
             base += batch;
         }
         Ok(None)
+    }
+}
+
+impl GpuContext {
+    /// Compile this optional protocol pipeline once and retain it on the GPU context.
+    pub(super) fn cached_linear_sha1_pipeline(&self) -> &wgpu::ComputePipeline {
+        self.linear_sha1_pipeline.get_or_init(|| {
+            let shader = self
+                .device
+                .create_shader_module(wgpu::ShaderModuleDescriptor {
+                    label: Some("linear-sha1"),
+                    source: wgpu::ShaderSource::Wgsl(Cow::Owned(format!(
+                        "{}\n{}",
+                        include_str!("../shaders/sha1_core.wgsl"),
+                        include_str!("../shaders/linear_sha1.wgsl")
+                    ))),
+                });
+            self.device
+                .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                    label: Some("linear-sha1"),
+                    layout: None,
+                    module: &shader,
+                    entry_point: Some("solve"),
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                    cache: None,
+                })
+        })
     }
 }
 

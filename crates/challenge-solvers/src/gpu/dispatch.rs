@@ -4,7 +4,7 @@
 //! implements its steady-state GPU methods.
 
 use super::{
-    COUNTER_SPACE, GpuContext, GpuError, GpuSolution, HASHES_PER_WG, Params,
+    COUNTER_SPACE, GpuContext, GpuError, GpuSolution, HASHES_PER_WG, Params, WG_SIZE,
     counter_to_decimal_nonce, expected_work, gpu_batch_target, gpu_u32, gpu_usize_u32, high_u32,
     low_u32, midstate, single_block_fast_compatible, single_block_search_space, verify,
     verify_fast_single_block, verify_single_block,
@@ -89,6 +89,58 @@ impl GpuContext {
         encoder.copy_buffer_to_buffer(&self.out_buf, 0, &self.staging, 0, 48);
         self.queue.submit([encoder.finish()]);
         let _ = self.read_result().await?;
+        Ok(())
+    }
+
+    /// Compile all optional general-WGPU protocol shaders on this persistent device.
+    ///
+    /// General SHA-256/BLAKE3 pipelines already live for the full context lifetime.
+    /// These optional SHA-1 and native-u64 pipelines are normally lazy; invoking
+    /// this once during service startup prevents shader/pipeline compilation on
+    /// the first protocol request. The device driver may still defer lower-level
+    /// execution specialization until first dispatch.
+    ///
+    /// Unsupported native-u64 pipelines remain absent rather than requesting
+    /// a feature that the negotiated adapter does not provide.
+    pub fn preload_protocol_pipelines(&self) {
+        let _ = self.cached_linear_sha1_pipeline();
+        let _ = self.cached_sha1_decimal_pipeline();
+        if self
+            .device
+            .features()
+            .contains(wgpu::Features::SHADER_INT64)
+        {
+            let _ = self.cached_altcha_sha64_pipeline();
+            let _ = self.cached_friendly_blake2b_pipeline();
+        }
+    }
+
+    /// Prepare optional protocol pipelines and exercise the Friendly `BLAKE2b`
+    /// compute kernel once, so the driver compiles its actual executable
+    /// before the first real Friendly challenge arrives.
+    ///
+    /// This is intended for the single general GPU worker at service startup,
+    /// before any regular GPU jobs are queued.
+    ///
+    /// # Errors
+    /// Propagates GPU submission or readback failure during shader warm-up.
+    pub async fn preload_and_warm_protocol_pipelines(&self) -> Result<(), GpuError> {
+        self.preload_protocol_pipelines();
+        if self
+            .device
+            .features()
+            .contains(wgpu::Features::SHADER_INT64)
+        {
+            // Threshold zero ensures a no-result warmup; it still exercises
+            // the actual hash shader with a complete 64-lane workgroup.
+            let solver = super::FriendlyBlake2bGpu::new(self)?;
+            let found = solver.scan(&[0u8; 128], 0, 0, WG_SIZE, 0).await?;
+            if found.is_some() {
+                return Err(GpuError::new(
+                    "Friendly shader warm-up returned unexpected proof",
+                ));
+            }
+        }
         Ok(())
     }
 

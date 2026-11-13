@@ -180,28 +180,7 @@ impl Sha1DecimalGpuSolver {
         &mut self,
         gpu: &GpuContext,
     ) -> Result<Option<Sha1DecimalSolution>, GpuError> {
-        let pipeline = gpu.sha1_decimal_pipeline.get_or_init(|| {
-            let source = format!(
-                "{}\n{}",
-                include_str!("../shaders/sha1_core.wgsl"),
-                include_str!("../shaders/sha1_decimal.wgsl"),
-            );
-            let shader = gpu
-                .device
-                .create_shader_module(wgpu::ShaderModuleDescriptor {
-                    label: Some("sha1-decimal"),
-                    source: wgpu::ShaderSource::Wgsl(Cow::Owned(source)),
-                });
-            gpu.device
-                .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                    label: Some("sha1-decimal"),
-                    layout: None,
-                    module: &shader,
-                    entry_point: Some("solve"),
-                    compilation_options: wgpu::PipelineCompilationOptions::default(),
-                    cache: None,
-                })
-        });
+        let pipeline = gpu.cached_sha1_decimal_pipeline();
         let input = gpu.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("sha1-decimal-params"),
             size: 31 * 4,
@@ -228,6 +207,34 @@ impl Sha1DecimalGpuSolver {
             base += u64::from(count);
         }
         Ok(None)
+    }
+}
+
+impl GpuContext {
+    /// Compile this optional protocol pipeline once and retain it on the GPU context.
+    pub(super) fn cached_sha1_decimal_pipeline(&self) -> &wgpu::ComputePipeline {
+        self.sha1_decimal_pipeline.get_or_init(|| {
+            let source = format!(
+                "{}\n{}",
+                include_str!("../shaders/sha1_core.wgsl"),
+                include_str!("../shaders/sha1_decimal.wgsl"),
+            );
+            let shader = self
+                .device
+                .create_shader_module(wgpu::ShaderModuleDescriptor {
+                    label: Some("sha1-decimal"),
+                    source: wgpu::ShaderSource::Wgsl(Cow::Owned(source)),
+                });
+            self.device
+                .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                    label: Some("sha1-decimal"),
+                    layout: None,
+                    module: &shader,
+                    entry_point: Some("solve"),
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                    cache: None,
+                })
+        })
     }
 }
 
