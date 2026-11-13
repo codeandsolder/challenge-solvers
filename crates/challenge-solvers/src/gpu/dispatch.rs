@@ -92,6 +92,29 @@ impl GpuContext {
         Ok(())
     }
 
+    /// Compile all optional general-WGPU protocol shaders on this persistent device.
+    ///
+    /// General SHA-256/BLAKE3 pipelines already live for the full context lifetime.
+    /// These optional SHA-1 and native-u64 pipelines are normally lazy; invoking
+    /// this once during service startup prevents shader/pipeline compilation on
+    /// the first protocol request. The device driver may still defer lower-level
+    /// execution specialization until first dispatch.
+    ///
+    /// Unsupported native-u64 pipelines remain absent rather than requesting
+    /// a feature that the negotiated adapter does not provide.
+    pub fn preload_protocol_pipelines(&self) {
+        let _ = self.cached_linear_sha1_pipeline();
+        let _ = self.cached_sha1_decimal_pipeline();
+        if self
+            .device
+            .features()
+            .contains(wgpu::Features::SHADER_INT64)
+        {
+            let _ = self.cached_altcha_sha64_pipeline();
+            let _ = self.cached_friendly_blake2b_pipeline();
+        }
+    }
+
     /// Human-readable adapter/backend description.
     #[must_use]
     pub fn adapter(&self) -> &str {

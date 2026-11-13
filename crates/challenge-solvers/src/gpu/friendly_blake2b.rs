@@ -8,7 +8,7 @@ use std::borrow::Cow;
 /// Initialized native-u64 BLAKE2b-256 pipeline for repeated GPU searches.
 pub struct FriendlyBlake2bGpu<'a> {
     gpu: &'a GpuContext,
-    pipeline: wgpu::ComputePipeline,
+    pipeline: &'a wgpu::ComputePipeline,
     input: wgpu::Buffer,
     bind: wgpu::BindGroup,
 }
@@ -22,24 +22,7 @@ impl<'a> FriendlyBlake2bGpu<'a> {
         if !gpu.device.features().contains(wgpu::Features::SHADER_INT64) {
             return Err(GpuError::new("Friendly BLAKE2b requires GPU SHADER_INT64"));
         }
-        let shader = gpu
-            .device
-            .create_shader_module(wgpu::ShaderModuleDescriptor {
-                label: Some("friendly-blake2b-256"),
-                source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(include_str!(
-                    "../shaders/friendly_blake2b.wgsl"
-                ))),
-            });
-        let pipeline = gpu
-            .device
-            .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                label: Some("friendly-blake2b-256"),
-                layout: None,
-                module: &shader,
-                entry_point: Some("solve"),
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-                cache: None,
-            });
+        let pipeline = gpu.cached_friendly_blake2b_pipeline();
         let input = gpu.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("friendly-blake2b-input"),
             size: 35 * 4,
@@ -118,7 +101,7 @@ impl<'a> FriendlyBlake2bGpu<'a> {
                 label: Some("friendly-blake2b-search"),
                 timestamp_writes: None,
             });
-            pass.set_pipeline(&self.pipeline);
+            pass.set_pipeline(self.pipeline);
             pass.set_bind_group(0, &self.bind, &[]);
             pass.dispatch_workgroups(count.div_ceil(WG_SIZE), 1, 1);
         }
@@ -133,6 +116,31 @@ impl<'a> FriendlyBlake2bGpu<'a> {
             return Err(GpuError::new("Friendly GPU nonce outside dispatched batch"));
         }
         Ok(Some(candidate))
+    }
+}
+
+impl GpuContext {
+    /// Compile this optional protocol pipeline once and retain it on the GPU context.
+    pub(super) fn cached_friendly_blake2b_pipeline(&self) -> &wgpu::ComputePipeline {
+        self.friendly_blake2b_pipeline.get_or_init(|| {
+            let shader = self
+                .device
+                .create_shader_module(wgpu::ShaderModuleDescriptor {
+                    label: Some("friendly-blake2b-256"),
+                    source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(include_str!(
+                        "../shaders/friendly_blake2b.wgsl"
+                    ))),
+                });
+            self.device
+                .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                    label: Some("friendly-blake2b-256"),
+                    layout: None,
+                    module: &shader,
+                    entry_point: Some("solve"),
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                    cache: None,
+                })
+        })
     }
 }
 
@@ -159,6 +167,45 @@ mod tests {
         candidate[124..128].copy_from_slice(&nonce.to_le_bytes());
         let digest = Blake2b256::digest(candidate);
         u32::from_le_bytes(digest[..4].try_into().expect("digest prefix")) < threshold
+    }
+
+    #[test]
+    #[ignore = "requires a physical WGPU adapter with SHADER_INT64"]
+    fn friendly_gpu_pipeline_preloading_reuses_compilation() -> anyhow::Result<()> {
+        let gpu = super::super::sha512_tests::block_on(GpuContext::create())?;
+        assert!(gpu.friendly_blake2b_pipeline.get().is_none());
+        assert!(gpu.linear_sha1_pipeline.get().is_none());
+        assert!(gpu.sha1_decimal_pipeline.get().is_none());
+        assert!(gpu.altcha_sha64_pipeline.get().is_none());
+
+        let started = Instant::now();
+        gpu.preload_protocol_pipelines();
+        let preload_ms = started.elapsed().as_secs_f64() * 1e3;
+        let pipeline = gpu
+            .friendly_blake2b_pipeline
+            .get()
+            .ok_or_else(|| GpuError::new("missing preloaded Friendly BLAKE2b pipeline"))?;
+        assert!(gpu.linear_sha1_pipeline.get().is_some());
+        assert!(gpu.sha1_decimal_pipeline.get().is_some());
+        assert!(gpu.altcha_sha64_pipeline.get().is_some());
+
+        let started = Instant::now();
+        gpu.preload_protocol_pipelines();
+        let second_preload_us = started.elapsed().as_secs_f64() * 1e6;
+
+        let mut times = Vec::new();
+        for _ in 0..12 {
+            let started = Instant::now();
+            let solver = FriendlyBlake2bGpu::new(&gpu)?;
+            assert!(std::ptr::eq(pipeline, solver.pipeline));
+            times.push(started.elapsed().as_secs_f64() * 1e6);
+        }
+        times.sort_by(f64::total_cmp);
+        println!(
+            "FRIENDLY_GPU_CACHE {{\"preload_all_ms\":{preload_ms:.5},\"repeat_preload_us\":{second_preload_us:.5},\"friendly_instance_median_us\":{:.5}}}",
+            times[times.len() / 2]
+        );
+        Ok(())
     }
 
     #[test]

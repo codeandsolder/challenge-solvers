@@ -139,6 +139,7 @@ pub struct GpuContext {
     linear_sha1_pipeline: std::sync::OnceLock<wgpu::ComputePipeline>,
     sha1_decimal_pipeline: std::sync::OnceLock<wgpu::ComputePipeline>,
     altcha_sha64_pipeline: std::sync::OnceLock<wgpu::ComputePipeline>,
+    friendly_blake2b_pipeline: std::sync::OnceLock<wgpu::ComputePipeline>,
     generic_in_buf: wgpu::Buffer,
     out_buf: wgpu::Buffer,
     staging: wgpu::Buffer,
