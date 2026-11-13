@@ -207,7 +207,7 @@ mod tests {
             for trial in 0..5 {
                 let started = Instant::now();
                 let result =
-                    super::super::sha512_tests::block_on(solver.scan(&input, bank, 0, count, 0))?;
+                    super::super::sha512_tests::block_on(solver.scan(&input, bank, 0, count, 1))?;
                 assert!(result.is_none());
                 let gpu_ns = started.elapsed().as_nanos();
                 let started = Instant::now();
