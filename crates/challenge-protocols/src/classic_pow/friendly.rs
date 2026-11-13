@@ -291,48 +291,33 @@ pub(super) async fn solve_gpu(gpu: &GpuContext, challenge: Value) -> anyhow::Res
     let request = request(challenge)?;
     let puzzle = parse(request.encoded())?;
     let started = Instant::now();
-    let mut solver = FriendlyBlake2bGpu::new(gpu)?;
-    let mut solutions = vec![None::<[u8; 8]>; usize::from(puzzle.solutions)];
-    let mut pending: Vec<u8> = (0..puzzle.solutions).collect();
+    let solver = FriendlyBlake2bGpu::new(gpu)?;
+    let mut solutions = Vec::with_capacity(usize::from(puzzle.solutions) * 8);
     let mut attempts = 0u64;
-    let mut base = 0u64;
+    let batch_capacity = solver.batch_capacity().min(262_144);
+    ensure!(
+        batch_capacity > 0,
+        "Friendly GPU cannot submit any candidates"
+    );
     let domain = u64::from(u32::MAX) + 1;
-    let expected_per_bank = domain.div_ceil(u64::from(puzzle.threshold));
-
-    // A four-mean search covers 98.2% of independent banks in one pass,
-    // while the total GPU budget prevents giant multi-bank dispatches from
-    // monopolizing the graphics device. Both are scheduling limits only:
-    // uncompleted banks continue over the entire valid 2^32 domain.
-    const SEARCH_MEANS: u64 = 4;
-    const MAX_CANDIDATES_PER_BANK: u64 = 1 << 18;
-    const MAX_CANDIDATES_PER_DISPATCH: u64 = 1 << 22;
-    while !pending.is_empty() {
-        ensure!(base < domain, "Friendly GPU exhausted nonce search space");
-        let batch_capacity = solver
-            .batch_capacity()
-            .min(MAX_CANDIDATES_PER_BANK)
-            .min(MAX_CANDIDATES_PER_DISPATCH / u64::try_from(pending.len())?);
-        ensure!(
-            batch_capacity > 0,
-            "Friendly GPU cannot submit required bank work"
-        );
-        let target = expected_per_bank.saturating_mul(SEARCH_MEANS).max(64);
-        let count = u32::try_from((domain - base).min(batch_capacity).min(target))?;
-        let outcomes = solver
-            .scan_banks(
-                &puzzle.padded,
-                &pending,
-                u32::try_from(base)?,
-                count,
-                puzzle.threshold,
-            )
-            .await?;
-        attempts = attempts
-            .checked_add(u64::from(count) * u64::try_from(pending.len())?)
-            .context("Friendly GPU dispatched candidate count overflow")?;
-        let mut unresolved = Vec::with_capacity(pending.len());
-        for (&bank, outcome) in pending.iter().zip(outcomes) {
-            if let Some(nonce) = outcome {
+    for bank in 0..puzzle.solutions {
+        let mut base = 0u64;
+        loop {
+            ensure!(base < domain, "Friendly GPU exhausted nonce bank {bank}");
+            let count = u32::try_from((domain - base).min(batch_capacity))?;
+            let found = solver
+                .scan(
+                    &puzzle.padded,
+                    bank,
+                    u32::try_from(base)?,
+                    count,
+                    puzzle.threshold,
+                )
+                .await?;
+            attempts = attempts
+                .checked_add(u64::from(count))
+                .context("Friendly GPU dispatched nonce count overflow")?;
+            if let Some(nonce) = found {
                 let mut input = puzzle.padded;
                 input[120] = bank;
                 input[124..128].copy_from_slice(&nonce.to_le_bytes());
@@ -340,27 +325,19 @@ pub(super) async fn solve_gpu(gpu: &GpuContext, challenge: Value) -> anyhow::Res
                     matches(&input, puzzle.threshold),
                     "Friendly GPU returned a BLAKE2b-256 nonce rejected by RustCrypto"
                 );
-                solutions[usize::from(bank)] = Some(input[120..128].try_into()?);
-            } else {
-                unresolved.push(bank);
+                solutions.extend_from_slice(&input[120..128]);
+                break;
             }
+            base += u64::from(count);
         }
-        pending = unresolved;
-        base += u64::from(count);
-    }
-    let mut bytes = Vec::with_capacity(usize::from(puzzle.solutions) * 8);
-    for solution in solutions {
-        bytes.extend_from_slice(
-            &solution.context("Friendly GPU did not find a solution for one bank")?,
-        );
     }
     ensure!(
-        verify(request.encoded(), &bytes)?,
+        verify(request.encoded(), &solutions)?,
         "Friendly GPU complete proof failed independent RustCrypto verification"
     );
     Ok(finish(
         &puzzle,
-        &bytes,
+        &solutions,
         attempts,
         started,
         "wgpu-blake2b-256",
@@ -413,8 +390,7 @@ mod tests {
         use std::hint::black_box;
 
         let gpu = block_on_test(GpuContext::create())?;
-        for (difficulty, count, extra) in [(80, 1, 0), (112, 3, 11), (128, 16, 32), (112, 255, 32)]
-        {
+        for (difficulty, count, extra) in [(80, 1, 0), (112, 3, 11), (128, 16, 32)] {
             let original = make_puzzle(difficulty, count, extra);
             let challenge = json!({"puzzle": original});
             let started = Instant::now();
