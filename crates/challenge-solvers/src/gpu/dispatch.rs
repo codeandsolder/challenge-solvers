@@ -144,6 +144,27 @@ impl GpuContext {
         Ok(())
     }
 
+    /// Borrow the WGPU device negotiated for this context.
+    ///
+    /// Other independent solver pipelines can use the same logical device,
+    /// retaining their own buffers while avoiding a second device request.
+    #[must_use]
+    pub const fn device(&self) -> &wgpu::Device {
+        &self.device
+    }
+
+    /// Borrow the queue associated with this GPU device.
+    #[must_use]
+    pub const fn queue(&self) -> &wgpu::Queue {
+        &self.queue
+    }
+
+    /// Maximum workgroups per dispatch dimension supported by the adapter.
+    #[must_use]
+    pub const fn max_workgroups_per_dimension(&self) -> u32 {
+        self.max_wgs
+    }
+
     /// Human-readable adapter/backend description.
     #[must_use]
     pub fn adapter(&self) -> &str {
