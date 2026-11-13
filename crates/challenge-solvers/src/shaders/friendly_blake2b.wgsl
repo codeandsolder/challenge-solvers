@@ -1,16 +1,18 @@
 // Optimized fixed-length Friendly Captcha v1 BLAKE2b-256 (RFC 7693).
 // Generated as static round schedule; 128-byte final block, t=128, f=~0.
 // P[0..31]: little-endian u32 words of padded 128-byte input.
-// P[32..34]: first candidate, count, and u32 digest threshold.
+// P[32..34]: first candidate, count, and digest threshold.
+// P[36]: bank_count, P[37..]: independently active banks.
 // The 8-byte nonce is bytes [120..128]: bank index byte + LE u32 counter.
 struct Proof { flag:atomic<u32>, nonce:u32, spare0:u32, spare1:u32, };
 @group(0) @binding(0) var<storage, read> P:array<u32>;
-@group(0) @binding(1) var<storage, read_write> R:Proof;
+@group(0) @binding(1) var<storage, read_write> R:array<Proof>;
 fn ror(x:u64,n:u32)->u64{return (x>>n)|(x<<(64u-n));}
 @compute @workgroup_size(64)
 fn solve(@builtin(global_invocation_id) gid:vec3<u32>){
  let idx=gid.x;
- if(idx>=P[33]){return;}
+ let bank_slot=gid.y;
+ if(idx>=P[33] || bank_slot>=P[36]){return;}
  let counter=P[32]+idx;
  let m0=(u64(P[1u])<<32u)|u64(P[0u]);
  let m1=(u64(P[3u])<<32u)|u64(P[2u]);
@@ -27,7 +29,7 @@ fn solve(@builtin(global_invocation_id) gid:vec3<u32>){
  let m12=(u64(P[25u])<<32u)|u64(P[24u]);
  let m13=(u64(P[27u])<<32u)|u64(P[26u]);
  let m14=(u64(P[29u])<<32u)|u64(P[28u]);
- let m15=(u64(counter)<<32u)|u64(P[30u]);
+ let m15=(u64(counter)<<32u)|u64((P[30u]&0xffffff00u)|P[37u+bank_slot]);
  var v0:u64=((u64(0x6a09e667u)<<32u)|u64(0xf2bdc928u));
  var v1:u64=((u64(0xbb67ae85u)<<32u)|u64(0x84caa73bu));
  var v2:u64=((u64(0x3c6ef372u)<<32u)|u64(0xfe94f82bu));
@@ -828,10 +830,10 @@ fn solve(@builtin(global_invocation_id) gid:vec3<u32>){
  if(digest_low<P[34]){
   var claimed=false;
   loop {
-   let result=atomicCompareExchangeWeak(&R.flag,0u,1u);
+   let result=atomicCompareExchangeWeak(&R[bank_slot].flag,0u,1u);
    if(result.exchanged){claimed=true;break;}
    if(result.old_value!=0u){break;}
   }
-  if(claimed){R.nonce=counter;}
+  if(claimed){R[bank_slot].nonce=counter;}
  }
 }
