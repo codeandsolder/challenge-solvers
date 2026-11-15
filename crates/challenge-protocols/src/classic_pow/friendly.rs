@@ -292,7 +292,12 @@ fn finish(
 /// # Errors
 /// Rejects a zero digest threshold or an adapter unable to dispatch work.
 #[cfg(feature = "gpu")]
-fn gpu_nonce_window(threshold: u32, adapter_capacity: u64) -> anyhow::Result<u64> {
+fn gpu_nonce_window_scaled(
+    threshold: u32,
+    adapter_capacity: u64,
+    numerator: u64,
+    denominator: u64,
+) -> anyhow::Result<u64> {
     const MIN_EFFICIENT_WINDOW: u64 = 8_192;
     const MAX_RESPONSIVE_WINDOW: u64 = 262_144;
     ensure!(threshold > 0, "Friendly digest threshold must be nonzero");
@@ -300,12 +305,20 @@ fn gpu_nonce_window(threshold: u32, adapter_capacity: u64) -> anyhow::Result<u64
         adapter_capacity > 0,
         "Friendly GPU cannot submit any candidates"
     );
+    ensure!(
+        numerator > 0 && denominator > 0,
+        "Friendly GPU window multiplier must be positive"
+    );
     let domain = u64::from(u32::MAX) + 1;
     let expected_trials = domain.div_ceil(u64::from(threshold));
-    Ok(expected_trials
-        .saturating_mul(2)
-        .clamp(MIN_EFFICIENT_WINDOW, MAX_RESPONSIVE_WINDOW)
-        .min(adapter_capacity))
+    // u128 keeps the arithmetic exact even for extreme positive ratios.
+    let scaled =
+        (u128::from(expected_trials) * u128::from(numerator)).div_ceil(u128::from(denominator));
+    let bounded = scaled.clamp(
+        u128::from(MIN_EFFICIENT_WINDOW),
+        u128::from(MAX_RESPONSIVE_WINDOW),
+    );
+    Ok(u64::try_from(bounded)?.min(adapter_capacity))
 }
 
 /// Search every independent Friendly Captcha v1 bank on the GPU.
@@ -317,13 +330,31 @@ fn gpu_nonce_window(threshold: u32, adapter_capacity: u64) -> anyhow::Result<u64
 /// and independently unverified GPU proof candidates.
 #[cfg(feature = "gpu")]
 pub(super) async fn solve_gpu(gpu: &GpuContext, challenge: Value) -> anyhow::Result<Result> {
+    solve_gpu_window(gpu, challenge, 2, 1).await
+}
+
+// The production entrypoint uses 2x until the controlled physical window
+// experiment establishes a better policy. The private multiplier is exercised
+// by an ignored real-GPU benchmark within the same compiled executable.
+#[cfg(feature = "gpu")]
+async fn solve_gpu_window(
+    gpu: &GpuContext,
+    challenge: Value,
+    numerator: u64,
+    denominator: u64,
+) -> anyhow::Result<Result> {
     let request = request(challenge)?;
     let puzzle = parse(request.encoded())?;
     let started = Instant::now();
     let solver = FriendlyBlake2bGpu::new(gpu)?;
     let mut bank_results = vec![None::<[u8; 8]>; usize::from(puzzle.solutions)];
     let mut attempts = 0u64;
-    let batch_capacity = gpu_nonce_window(puzzle.threshold, solver.batch_capacity())?;
+    let batch_capacity = gpu_nonce_window_scaled(
+        puzzle.threshold,
+        solver.batch_capacity(),
+        numerator,
+        denominator,
+    )?;
     let domain = u64::from(u32::MAX) + 1;
     let mut pending: Vec<u8> = (0..puzzle.solutions).collect();
     let mut base = 0u64;
@@ -395,26 +426,105 @@ mod tests {
     #[test]
     fn friendly_gpu_window_planning_covers_full_threshold_domain() -> anyhow::Result<()> {
         const CAP: u64 = 262_144;
-        assert!(gpu_nonce_window(0, CAP).is_err());
-        assert!(gpu_nonce_window(1, 0).is_err());
-        assert_eq!(gpu_nonce_window(u32::MAX, CAP)?, 8_192);
-        assert_eq!(gpu_nonce_window(threshold(80)?, CAP)?, 8_192);
-        assert_eq!(gpu_nonce_window(threshold(112)?, CAP)?, 32_772);
-        assert_eq!(gpu_nonce_window(threshold(128)?, CAP)?, 131_086);
-        assert_eq!(gpu_nonce_window(threshold(144)?, CAP)?, CAP);
-        assert_eq!(gpu_nonce_window(1, CAP)?, CAP);
-        assert_eq!(gpu_nonce_window(1, 256)?, 256);
-        assert_eq!(gpu_nonce_window(u32::MAX, 512)?, 512);
+        assert!(gpu_nonce_window_scaled(0, CAP, 2, 1).is_err());
+        assert!(gpu_nonce_window_scaled(1, 0, 2, 1).is_err());
+        assert_eq!(gpu_nonce_window_scaled(u32::MAX, CAP, 2, 1)?, 8_192);
+        assert_eq!(gpu_nonce_window_scaled(threshold(80)?, CAP, 2, 1)?, 8_192);
+        assert_eq!(gpu_nonce_window_scaled(threshold(112)?, CAP, 2, 1)?, 32_772);
+        assert_eq!(
+            gpu_nonce_window_scaled(threshold(128)?, CAP, 2, 1)?,
+            131_086
+        );
+        assert_eq!(gpu_nonce_window_scaled(threshold(144)?, CAP, 2, 1)?, CAP);
+        assert_eq!(gpu_nonce_window_scaled(1, CAP, 2, 1)?, CAP);
+        assert_eq!(gpu_nonce_window_scaled(1, 256, 2, 1)?, 256);
+        assert_eq!(gpu_nonce_window_scaled(u32::MAX, 512, 2, 1)?, 512);
         let mut previous = 0;
         for difficulty in u8::MIN..=u8::MAX {
             let threshold = threshold(difficulty)?;
-            let window = gpu_nonce_window(threshold, CAP)?;
+            let window = gpu_nonce_window_scaled(threshold, CAP, 2, 1)?;
             assert!((1..=CAP).contains(&window));
             assert!(
                 window >= previous,
                 "window shrank at difficulty {difficulty}"
             );
             previous = window;
+        }
+        Ok(())
+    }
+
+    /// Physical full-proof A/B with identical shaders and separate WGPU
+    /// dispatch/readback semantics, varying only the nonce-window multiplier.
+    /// Different signed fixture bytes each trial prevent a lucky fixed nonce
+    /// distribution from disguising the cost of failed banks.
+    #[cfg(feature = "gpu")]
+    #[test]
+    #[ignore = "requires physical Vulkan GPU with SHADER_INT64"]
+    fn friendly_gpu_nonce_window_physical_sweep() -> anyhow::Result<()> {
+        let gpu = block_on_test(GpuContext::create())?;
+        let factors = [(1_u64, 1_u64), (3, 2), (2, 1)];
+        for (difficulty, banks, extra) in [
+            (128_u8, 1_u8, 0_usize),
+            (128, 16, 32),
+            (128, 32, 7),
+            (80, 255, 7),
+            (112, 3, 11),
+        ] {
+            for trial in 0..72_u64 {
+                let original = make_puzzle(difficulty, banks, extra);
+                let (signature, payload) = original
+                    .split_once('.')
+                    .context("benchmark puzzle missing signature")?;
+                let mut bytes = STANDARD.decode(payload)?;
+                bytes[24..32]
+                    .copy_from_slice(&(trial + u64::from(difficulty) * 1_000).to_le_bytes());
+                let original = format!("{signature}.{}", STANDARD.encode(bytes));
+                let challenge = json!({"puzzle": original});
+                let mut order = [0_usize, 1, 2];
+                order.rotate_left(usize::try_from(trial % 3)?);
+                if trial % 2 == 1 {
+                    order.reverse();
+                }
+                for &index in &order {
+                    let (numerator, denominator) = factors[index];
+                    let started = Instant::now();
+                    let result = block_on_test(solve_gpu_window(
+                        &gpu,
+                        challenge.clone(),
+                        numerator,
+                        denominator,
+                    ))?;
+                    let elapsed_ms = started.elapsed().as_secs_f64() * 1e3;
+                    let response = result.answer["response"]
+                        .as_str()
+                        .context("GPU response missing")?;
+                    let fields: Vec<_> = response.split('.').collect();
+                    ensure!(fields.len() == 4, "incorrect response shape");
+                    let proof = STANDARD.decode(fields[2])?;
+                    ensure!(
+                        verify(&original, &proof)?,
+                        "GPU proof rejected by independent RustCrypto verifier"
+                    );
+                    ensure!(
+                        proof.len() == usize::from(banks) * 8,
+                        "incorrect proof bank count"
+                    );
+                    for (bank, nonce) in proof.chunks_exact(8).enumerate() {
+                        ensure!(usize::from(nonce[0]) == bank, "incorrect bank index");
+                        ensure!(nonce[1..4] == [0, 0, 0], "incorrect reserved bytes");
+                    }
+                    println!(
+                        "FRIENDLY_WINDOW_SWEEP {{\"difficulty\":{difficulty},\"banks\":{banks},\"trial\":{trial},\"numerator\":{numerator},\"denominator\":{denominator},\"window\":{},\"gpu_ms\":{elapsed_ms},\"attempted\":{}}}",
+                        gpu_nonce_window_scaled(
+                            threshold(difficulty)?,
+                            262_144,
+                            numerator,
+                            denominator,
+                        )?,
+                        result.answer["attempted_nonces"]
+                    );
+                }
+            }
         }
         Ok(())
     }
