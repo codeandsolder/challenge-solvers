@@ -677,7 +677,13 @@ impl GpuContext {
     }
 
     pub(super) async fn read_result(&self) -> Result<Vec<u32>, GpuError> {
-        let slice = self.staging.slice(..);
+        self.read_staging(&self.staging).await
+    }
+
+    /// Map and read an arbitrary staging buffer on this logical GPU device.
+    /// The caller exclusively owns GPU submission/readback synchronization.
+    pub(super) async fn read_staging(&self, staging: &wgpu::Buffer) -> Result<Vec<u32>, GpuError> {
+        let slice = staging.slice(..);
         let (tx, rx) = futures_channel::oneshot::channel();
         slice.map_async(wgpu::MapMode::Read, move |result| {
             let _ = tx.send(result);
@@ -696,7 +702,7 @@ impl GpuContext {
             .map_err(|e| GpuError::new(format!("read mapped GPU result: {e}")))?;
         let values = bytemuck::cast_slice::<u8, u32>(&mapped).to_vec();
         drop(mapped);
-        self.staging.unmap();
+        staging.unmap();
         Ok(values)
     }
 }
