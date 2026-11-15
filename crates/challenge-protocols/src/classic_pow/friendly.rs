@@ -279,6 +279,35 @@ fn finish(
     }
 }
 
+/// Choose the number of GPU nonce candidates to try per unresolved bank.
+///
+/// The v1 digest comparison has a per-hash success probability of
+/// `threshold / 2^32`, so the expected counter trials are `2^32 / threshold`.
+/// Search roughly twice that window (to amortize GPU staging/dispatch without
+/// overhashing easy puzzles), with a floor for GPU launch efficiency and a
+/// ceiling that keeps hard puzzles responsive to the service scheduler.
+/// Subsequent batches advance by exactly the attempted window until each bank
+/// is solved or the full nonce domain is exhausted: no puzzle is truncated.
+///
+/// # Errors
+/// Rejects a zero digest threshold or an adapter unable to dispatch work.
+#[cfg(feature = "gpu")]
+fn gpu_nonce_window(threshold: u32, adapter_capacity: u64) -> anyhow::Result<u64> {
+    const MIN_EFFICIENT_WINDOW: u64 = 8_192;
+    const MAX_RESPONSIVE_WINDOW: u64 = 262_144;
+    ensure!(threshold > 0, "Friendly digest threshold must be nonzero");
+    ensure!(
+        adapter_capacity > 0,
+        "Friendly GPU cannot submit any candidates"
+    );
+    let domain = u64::from(u32::MAX) + 1;
+    let expected_trials = domain.div_ceil(u64::from(threshold));
+    Ok(expected_trials
+        .saturating_mul(2)
+        .clamp(MIN_EFFICIENT_WINDOW, MAX_RESPONSIVE_WINDOW)
+        .min(adapter_capacity))
+}
+
 /// Search every independent Friendly Captcha v1 bank on the GPU.
 /// GPU attempt count is the upper bound of submitted candidates, not
 /// the exact number of threads that evaluated a candidate.
@@ -295,11 +324,7 @@ pub(super) async fn solve_gpu(gpu: &GpuContext, challenge: Value) -> anyhow::Res
     let solver = FriendlyBlake2bGpu::new(gpu)?;
     let mut bank_results = vec![None::<[u8; 8]>; usize::from(puzzle.solutions)];
     let mut attempts = 0u64;
-    let batch_capacity = solver.batch_capacity().min(262_144);
-    ensure!(
-        batch_capacity > 0,
-        "Friendly GPU cannot submit any candidates"
-    );
+    let batch_capacity = gpu_nonce_window(puzzle.threshold, solver.batch_capacity())?;
     let domain = u64::from(u32::MAX) + 1;
     let mut pending: Vec<u8> = (0..puzzle.solutions).collect();
     let mut base = 0u64;
@@ -364,6 +389,34 @@ pub(super) async fn solve_gpu(gpu: &GpuContext, challenge: Value) -> anyhow::Res
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(feature = "gpu")]
+    #[test]
+    fn friendly_gpu_window_planning_covers_full_threshold_domain() -> anyhow::Result<()> {
+        const CAP: u64 = 262_144;
+        assert!(gpu_nonce_window(0, CAP).is_err());
+        assert!(gpu_nonce_window(1, 0).is_err());
+        assert_eq!(gpu_nonce_window(u32::MAX, CAP)?, 8_192);
+        assert_eq!(gpu_nonce_window(threshold(80)?, CAP)?, 8_192);
+        assert_eq!(gpu_nonce_window(threshold(112)?, CAP)?, 32_772);
+        assert_eq!(gpu_nonce_window(threshold(128)?, CAP)?, 131_086);
+        assert_eq!(gpu_nonce_window(threshold(144)?, CAP)?, CAP);
+        assert_eq!(gpu_nonce_window(1, CAP)?, CAP);
+        assert_eq!(gpu_nonce_window(1, 256)?, 256);
+        assert_eq!(gpu_nonce_window(u32::MAX, 512)?, 512);
+        let mut previous = 0;
+        for difficulty in u8::MIN..=u8::MAX {
+            let threshold = threshold(difficulty)?;
+            let window = gpu_nonce_window(threshold, CAP)?;
+            assert!((1..=CAP).contains(&window));
+            assert!(
+                window >= previous,
+                "window shrank at difficulty {difficulty}"
+            );
+            previous = window;
+        }
+        Ok(())
+    }
 
     #[cfg(feature = "gpu")]
     fn block_on_test<F: std::future::Future>(future: F) -> F::Output {
