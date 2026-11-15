@@ -5,6 +5,25 @@
 use super::{GpuContext, GpuError, WG_SIZE};
 use std::borrow::Cow;
 
+// Keep each 2D GPU submission within the worst-case work already performed by
+// the previous 16-bank x 262144-nonce scheduler. The per-bank workgroup is
+// rounded to WG_SIZE, so partial workgroups count toward the budget.
+const MAX_CANDIDATE_INVOCATIONS_PER_DISPATCH: u64 = 16 * 262_144;
+
+fn planned_bank_rows(candidates: u32, max_workgroups: u32) -> Result<usize, GpuError> {
+    if candidates == 0 || max_workgroups == 0 {
+        return Err(GpuError::new(
+            "Friendly GPU bank group has zero work or device capacity",
+        ));
+    }
+    let per_bank = u64::from(candidates).div_ceil(u64::from(WG_SIZE)) * u64::from(WG_SIZE);
+    let rows = (MAX_CANDIDATE_INVOCATIONS_PER_DISPATCH / per_bank)
+        .max(1)
+        .min(u64::from(max_workgroups))
+        .min(u64::from(u8::MAX) + 1);
+    usize::try_from(rows).map_err(|_| GpuError::new("Friendly GPU bank count too large"))
+}
+
 /// Initialized native-u64 BLAKE2b-256 pipeline for repeated GPU searches.
 /// Independent puzzle banks share one 2D dispatch and one staging readback.
 pub struct FriendlyBlake2bGpu<'a> {
@@ -77,6 +96,15 @@ impl<'a> FriendlyBlake2bGpu<'a> {
         u64::from(self.gpu.max_wgs) * u64::from(WG_SIZE)
     }
 
+    /// Recommend a GPU bank group sized to the candidate window and device.
+    /// A short nonce window can use more rows without increasing total work.
+    ///
+    /// # Errors
+    /// Rejects a zero candidate window or a device lacking compute capacity.
+    pub fn bank_group_capacity(&self, candidates: u32) -> Result<usize, GpuError> {
+        planned_bank_rows(candidates, self.gpu.max_wgs)
+    }
+
     /// Evaluate an exact nonce window independently for each requested bank,
     /// in one 2D GPU dispatch and staging-buffer readback.
     ///
@@ -96,7 +124,10 @@ impl<'a> FriendlyBlake2bGpu<'a> {
     ) -> Result<Vec<Option<u32>>, GpuError> {
         let domain_end = u64::from(base) + u64::from(count);
         let max_batch = self.batch_capacity();
+        let bank_rows = u32::try_from(banks.len())
+            .map_err(|_| GpuError::new("Friendly GPU bank count too large"))?;
         if banks.is_empty()
+            || bank_rows > self.gpu.max_wgs
             || banks.len() > usize::from(u8::MAX) + 1
             || count == 0
             || domain_end > u64::from(u32::MAX) + 1
@@ -119,7 +150,7 @@ impl<'a> FriendlyBlake2bGpu<'a> {
         packed[32] = base;
         packed[33] = count;
         packed[34] = threshold;
-        packed[35] = u32::try_from(banks.len()).map_err(|_| GpuError::new("too many banks"))?;
+        packed[35] = bank_rows;
         for (slot, bank) in packed[36..].iter_mut().zip(banks) {
             *slot = u32::from(*bank);
         }
@@ -150,11 +181,7 @@ impl<'a> FriendlyBlake2bGpu<'a> {
             });
             pass.set_pipeline(self.pipeline);
             pass.set_bind_group(0, &self.bind, &[]);
-            pass.dispatch_workgroups(
-                count.div_ceil(WG_SIZE),
-                u32::try_from(banks.len()).map_err(|_| GpuError::new("too many banks"))?,
-                1,
-            );
+            pass.dispatch_workgroups(count.div_ceil(WG_SIZE), bank_rows, 1);
         }
         encoder.copy_buffer_to_buffer(&self.output, 0, &self.staging, 0, result_bytes);
         self.gpu.queue.submit([encoder.finish()]);
@@ -366,6 +393,72 @@ mod tests {
             "FRIENDLY_GPU_PROOF_PASS adapter={} nonce={found}",
             gpu.adapter()
         );
+        Ok(())
+    }
+
+    #[test]
+    fn friendly_gpu_group_budget_and_device_limits() -> anyhow::Result<()> {
+        assert!(planned_bank_rows(0, 65535).is_err());
+        assert!(planned_bank_rows(8192, 0).is_err());
+        assert_eq!(planned_bank_rows(8192, 65535)?, 256);
+        assert_eq!(planned_bank_rows(8192, 4)?, 4);
+        assert_eq!(planned_bank_rows(32772, 65535)?, 127);
+        assert_eq!(planned_bank_rows(131086, 65535)?, 31);
+        assert_eq!(planned_bank_rows(262144, 65535)?, 16);
+        assert_eq!(planned_bank_rows(u32::MAX, 65535)?, 1);
+        assert_eq!(planned_bank_rows(1, 1)?, 1);
+        for candidates in [1, 64, 65, 8192, 32772, 131086, 262144, u32::MAX] {
+            let rows = planned_bank_rows(candidates, 65535)?;
+            assert!((1..=256).contains(&rows));
+        }
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "requires a physical SHADER_INT64 GPU"]
+    fn friendly_blake2b_gpu_bank_group_shape_sweep() -> anyhow::Result<()> {
+        // Hold the exact number of candidate hashes constant while varying
+        // GPU row grouping. Alternating the order avoids systematic GPU
+        // frequency and thermal drift favoring one particular shape.
+        let gpu = super::super::sha512_tests::block_on(GpuContext::create())?;
+        let solver = FriendlyBlake2bGpu::new(&gpu)?;
+        let input = puzzle_input();
+        for (banks_count, candidates, sizes) in [
+            (255usize, 8_192u32, &[16usize, 32, 64, 128, 255][..]),
+            (16usize, 131_086u32, &[1usize, 4, 8, 16][..]),
+        ] {
+            let banks: Vec<u8> = (0..banks_count)
+                .map(u8::try_from)
+                .collect::<Result<_, _>>()?;
+            // Fixed threshold zero prevents randomly early successes from
+            // changing active-bank count; all groups do exactly equal work.
+            for trial in 0..8 {
+                let order: Vec<_> = if trial % 2 == 0 {
+                    sizes.to_vec()
+                } else {
+                    sizes.iter().copied().rev().collect()
+                };
+                for group_size in order {
+                    let started = Instant::now();
+                    let mut submitted = 0u64;
+                    for group in banks.chunks(group_size) {
+                        let results = super::super::sha512_tests::block_on(
+                            solver.scan_banks(&input, group, 0, candidates, 0),
+                        )?;
+                        assert_eq!(results, vec![None; group.len()]);
+                        submitted += u64::from(candidates) * u64::try_from(group.len())?;
+                    }
+                    assert_eq!(
+                        submitted,
+                        u64::try_from(banks_count)? * u64::from(candidates)
+                    );
+                    println!(
+                        "FRIENDLY_GROUP_SWEEP {{\"banks\":{banks_count},\"candidates\":{candidates},\"group_size\":{group_size},\"trial\":{trial},\"gpu_ms\":{:.6}}}",
+                        started.elapsed().as_secs_f64() * 1000.0,
+                    );
+                }
+            }
+        }
         Ok(())
     }
 

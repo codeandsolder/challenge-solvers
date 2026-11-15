@@ -317,7 +317,6 @@ fn gpu_nonce_window(threshold: u32, adapter_capacity: u64) -> anyhow::Result<u64
 /// and independently unverified GPU proof candidates.
 #[cfg(feature = "gpu")]
 pub(super) async fn solve_gpu(gpu: &GpuContext, challenge: Value) -> anyhow::Result<Result> {
-    const BANKS_PER_DISPATCH: usize = 16;
     let request = request(challenge)?;
     let puzzle = parse(request.encoded())?;
     let started = Instant::now();
@@ -328,17 +327,19 @@ pub(super) async fn solve_gpu(gpu: &GpuContext, challenge: Value) -> anyhow::Res
     let domain = u64::from(u32::MAX) + 1;
     let mut pending: Vec<u8> = (0..puzzle.solutions).collect();
     let mut base = 0u64;
-    // Bound work per GPU command while supporting the full 1..=255 bank domain.
-    // A 16-bank group matches the common v1 puzzle and reduces its per-bank
-    // GPU map/readback sequence to one submission and one wait per round.
+    // Bound total work per GPU command, while grouping more easy-puzzle banks
+    // into one map/readback. Group size also respects the GPU Y-dimension limit
+    // and full 1..=255 bank domain. Unsolved banks remain eligible in every
+    // subsequent nonce window until they are independently verified.
     while !pending.is_empty() {
         ensure!(
             base < domain,
             "Friendly GPU exhausted nonce domain for unsolved banks"
         );
         let count = u32::try_from((domain - base).min(batch_capacity))?;
+        let group_size = solver.bank_group_capacity(count)?;
         let mut remaining = Vec::new();
-        for group in pending.chunks(BANKS_PER_DISPATCH) {
+        for group in pending.chunks(group_size) {
             let found = solver
                 .scan_banks(
                     &puzzle.padded,
