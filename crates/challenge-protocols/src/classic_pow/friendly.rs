@@ -288,11 +288,12 @@ fn finish(
 /// and independently unverified GPU proof candidates.
 #[cfg(feature = "gpu")]
 pub(super) async fn solve_gpu(gpu: &GpuContext, challenge: Value) -> anyhow::Result<Result> {
+    const BANKS_PER_DISPATCH: usize = 16;
     let request = request(challenge)?;
     let puzzle = parse(request.encoded())?;
     let started = Instant::now();
     let solver = FriendlyBlake2bGpu::new(gpu)?;
-    let mut solutions = Vec::with_capacity(usize::from(puzzle.solutions) * 8);
+    let mut bank_results = vec![None::<[u8; 8]>; usize::from(puzzle.solutions)];
     let mut attempts = 0u64;
     let batch_capacity = solver.batch_capacity().min(262_144);
     ensure!(
@@ -300,36 +301,52 @@ pub(super) async fn solve_gpu(gpu: &GpuContext, challenge: Value) -> anyhow::Res
         "Friendly GPU cannot submit any candidates"
     );
     let domain = u64::from(u32::MAX) + 1;
-    for bank in 0..puzzle.solutions {
-        let mut base = 0u64;
-        loop {
-            ensure!(base < domain, "Friendly GPU exhausted nonce bank {bank}");
-            let count = u32::try_from((domain - base).min(batch_capacity))?;
+    let mut pending: Vec<u8> = (0..puzzle.solutions).collect();
+    let mut base = 0u64;
+    // Bound work per GPU command while supporting the full 1..=255 bank domain.
+    // A 16-bank group matches the common v1 puzzle and reduces its per-bank
+    // GPU map/readback sequence to one submission and one wait per round.
+    while !pending.is_empty() {
+        ensure!(
+            base < domain,
+            "Friendly GPU exhausted nonce domain for unsolved banks"
+        );
+        let count = u32::try_from((domain - base).min(batch_capacity))?;
+        let mut remaining = Vec::new();
+        for group in pending.chunks(BANKS_PER_DISPATCH) {
             let found = solver
-                .scan(
+                .scan_banks(
                     &puzzle.padded,
-                    bank,
+                    group,
                     u32::try_from(base)?,
                     count,
                     puzzle.threshold,
                 )
                 .await?;
             attempts = attempts
-                .checked_add(u64::from(count))
+                .checked_add(u64::from(count) * u64::try_from(group.len())?)
                 .context("Friendly GPU dispatched nonce count overflow")?;
-            if let Some(nonce) = found {
-                let mut input = puzzle.padded;
-                input[120] = bank;
-                input[124..128].copy_from_slice(&nonce.to_le_bytes());
-                ensure!(
-                    matches(&input, puzzle.threshold),
-                    "Friendly GPU returned a BLAKE2b-256 nonce rejected by RustCrypto"
-                );
-                solutions.extend_from_slice(&input[120..128]);
-                break;
+            for (&bank, candidate) in group.iter().zip(found) {
+                if let Some(nonce) = candidate {
+                    let mut input = puzzle.padded;
+                    input[120] = bank;
+                    input[124..128].copy_from_slice(&nonce.to_le_bytes());
+                    ensure!(
+                        matches(&input, puzzle.threshold),
+                        "Friendly GPU returned a BLAKE2b-256 nonce rejected by RustCrypto"
+                    );
+                    bank_results[usize::from(bank)] = Some(input[120..128].try_into()?);
+                } else {
+                    remaining.push(bank);
+                }
             }
-            base += u64::from(count);
         }
+        pending = remaining;
+        base += u64::from(count);
+    }
+    let mut solutions = Vec::with_capacity(usize::from(puzzle.solutions) * 8);
+    for result in bank_results {
+        solutions.extend_from_slice(&result.context("Friendly GPU bank missing solution")?);
     }
     ensure!(
         verify(request.encoded(), &solutions)?,
@@ -390,7 +407,7 @@ mod tests {
         use std::hint::black_box;
 
         let gpu = block_on_test(GpuContext::create())?;
-        for (difficulty, count, extra) in [(80, 1, 0), (112, 3, 11), (128, 16, 32)] {
+        for (difficulty, count, extra) in [(80, 1, 0), (112, 3, 11), (128, 16, 32), (80, 255, 7)] {
             let original = make_puzzle(difficulty, count, extra);
             let challenge = json!({"puzzle": original});
             let started = Instant::now();
