@@ -398,7 +398,7 @@ impl GpuSolver {
             }
             base += u64::from(batch);
         }
-        self.last_nonce_or_exhausted(hashx, challenge, started, implementation)
+        Self::last_nonce_or_exhausted(hashx, challenge, started, implementation)
     }
 
     fn solve_specialized(
@@ -475,11 +475,10 @@ impl GpuSolver {
             }
             base += u64::from(batch);
         }
-        self.last_nonce_or_exhausted(hashx, challenge, started, SPECIALIZED_IMPLEMENTATION)
+        Self::last_nonce_or_exhausted(hashx, challenge, started, SPECIALIZED_IMPLEMENTATION)
     }
 
     fn last_nonce_or_exhausted(
-        &self,
         hashx: &HashX,
         challenge: &Challenge,
         started: Instant,
