@@ -271,7 +271,7 @@ impl<'a> ScryptKdfGpu<'a> {
         }
         encoder.copy_buffer_to_buffer(&buffers.result, 0, &buffers.staging, 0, spec.key_bytes);
         gpu.queue.submit([encoder.finish()]);
-        let data = readback_scrypt(device, &buffers.staging).await?;
+        let data = readback_scrypt(gpu, &buffers.staging).await?;
         let candidate_bytes = usize::try_from(spec.key_bytes / u64::from(spec.candidates))
             .map_err(|_| GpuError::new("scrypt per-candidate output bytes overflow"))?;
         let mut results = Vec::new();
