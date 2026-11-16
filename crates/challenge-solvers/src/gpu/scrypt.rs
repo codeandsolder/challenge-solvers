@@ -442,6 +442,24 @@ mod readback_cancellation_tests {
 
     #[test]
     #[ignore = "requires a physical GPU"]
+    fn scrypt_kdf_matches_rfc7914_vector() -> anyhow::Result<()> {
+        let gpu = super::super::sha512_tests::block_on(GpuContext::create())?;
+        let kdf = ScryptKdfGpu::new(&gpu);
+        // RFC 7914 section 12: P="", S="", N=16, r=1, p=1, dkLen=64.
+        let expected: [u8; 64] = [
+            0x77, 0xd6, 0x57, 0x62, 0x38, 0x65, 0x7b, 0x20, 0x3b, 0x19, 0xca, 0x42, 0xc1, 0x8a,
+            0x04, 0x97, 0xf1, 0x6b, 0x48, 0x44, 0xe3, 0x07, 0x4a, 0xe8, 0xdf, 0xdf, 0xfa, 0x3f,
+            0xed, 0xe2, 0x14, 0x42, 0xfc, 0xd0, 0x06, 0x9d, 0xed, 0x09, 0x48, 0xf8, 0x32, 0x6a,
+            0x75, 0x3a, 0x0f, 0xc8, 0x1f, 0x17, 0xe8, 0xd3, 0xe0, 0xfb, 0x2e, 0x0d, 0x36, 0x28,
+            0xcf, 0x35, 0xe2, 0x0c, 0x38, 0xd1, 0x89, 0x06,
+        ];
+        let actual = super::super::sha512_tests::block_on(kdf.derive_key(b"", b"", 16, 1, 1, 64))?;
+        assert_eq!(actual, expected);
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "requires a physical GPU"]
     fn canceled_scrypt_map_is_reusable() -> anyhow::Result<()> {
         let gpu = super::super::sha512_tests::block_on(GpuContext::create())?;
         let staging = gpu.device.create_buffer(&wgpu::BufferDescriptor {
