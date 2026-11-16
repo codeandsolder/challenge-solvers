@@ -48,7 +48,7 @@ jobs:
     uses: codeandsolder/ci-workflows/.github/workflows/rust-sccache.yml@c6fcb5f8920460c109ee87152506c3d97889ed4e # main
     with:
       rust-toolchain: "nightly-2026-11-03"
-      rust-components: "miri,rust-src"
+      rust-components: "miri rust-src"
       timeout-minutes: 15
       command: |
         export MIRIFLAGS="-Zmiri-tree-borrows"
