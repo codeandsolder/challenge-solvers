@@ -28,6 +28,7 @@ impl GpuContext {
         params.words[11] = u32::MAX;
         params.words[12] = u32::MAX;
         params.words[13] = 8192; // Exercise the fast kernel in the warmup workgroup.
+        let _gpu_guard = self.dispatch_lock.lock().await;
         self.queue.write_buffer(&self.out_buf, 0, &[0; 48]);
         self.queue
             .write_buffer(&self.in_buf, 0, bytemuck::bytes_of(&params));
@@ -133,7 +134,7 @@ impl GpuContext {
         {
             // Threshold zero ensures a no-result warmup; it still exercises
             // the actual hash shader with a complete 64-lane workgroup.
-            let solver = super::FriendlyBlake2bGpu::new(self)?;
+            let mut solver = super::FriendlyBlake2bGpu::new(self)?;
             let found = solver.scan(&[0u8; 128], 0, 0, WG_SIZE, 0).await?;
             if found.is_some() {
                 return Err(GpuError::new(
@@ -230,6 +231,7 @@ impl GpuContext {
         params.words[10] = bitlen;
         params.words[11] = high_u32(mask);
         params.words[12] = low_u32(mask);
+        let _gpu_guard = self.dispatch_lock.lock().await;
         self.queue.write_buffer(&self.out_buf, 0, &[0; 48]);
 
         let expected = 16_u64.saturating_pow(u32::from(difficulty.get()));
@@ -358,6 +360,7 @@ impl GpuContext {
         } else {
             0
         };
+        let _gpu_guard = self.dispatch_lock.lock().await;
         self.queue.write_buffer(&self.out_buf, 0, &[0; 48]);
 
         let desired = gpu_batch_target(
@@ -450,6 +453,7 @@ impl GpuContext {
         params[32] = u32::from(TYPE);
         params[33] = u32::from(message.no_trailing_zeros)
             | (u32::from(cfg!(feature = "compare-64bit")) << 1);
+        let _gpu_guard = self.dispatch_lock.lock().await;
         self.queue.write_buffer(&self.out_buf, 0, &[0; 48]);
 
         let desired = gpu_batch_target(expected_work::<TYPE>(target, mask), HASHES_PER_WG);
@@ -512,6 +516,7 @@ impl GpuContext {
         params: &[u32; 64],
         workgroups: u32,
     ) -> Result<Option<(u64, [u32; 8])>, GpuError> {
+        let _gpu_guard = self.dispatch_lock.lock().await;
         self.queue.write_buffer(&self.out_buf, 0, &[0; 48]);
         self.queue
             .write_buffer(&self.generic_in_buf, 0, bytemuck::cast_slice(params));
@@ -567,6 +572,7 @@ impl GpuContext {
         params: &[u32; 64],
         workgroups: u32,
     ) -> Result<Option<(u64, [u32; 8])>, GpuError> {
+        let _gpu_guard = self.dispatch_lock.lock().await;
         self.queue.write_buffer(&self.out_buf, 0, &[0; 48]);
         self.queue
             .write_buffer(&self.generic_in_buf, 0, bytemuck::cast_slice(params));
@@ -629,6 +635,7 @@ impl GpuContext {
             })
         });
         let input = variable_buffer.as_ref().unwrap_or(&self.generic_in_buf);
+        let _gpu_guard = self.dispatch_lock.lock().await;
         self.queue.write_buffer(&self.out_buf, 0, &[0; 48]);
         self.queue
             .write_buffer(input, 0, bytemuck::cast_slice(params));

@@ -3,7 +3,7 @@
 //! The same Rust implementation targets native `wgpu` backends and browser WebGPU on `wasm32`.
 
 use core::fmt;
-use std::{string::String, vec::Vec};
+use std::{string::String, sync::Arc, vec::Vec};
 
 use bytemuck::{Pod, Zeroable};
 
@@ -126,6 +126,9 @@ struct Params {
 pub struct GpuContext {
     device: wgpu::Device,
     queue: wgpu::Queue,
+    // SHA-family pipelines share input/output/staging buffers. Hold this lock
+    // through full GPU readback, including across alternative-majority aliases.
+    dispatch_lock: Arc<async_lock::Mutex<()>>,
     pipeline: wgpu::ComputePipeline,
     in_buf: wgpu::Buffer,
     generic_pipeline: wgpu::ComputePipeline,

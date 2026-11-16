@@ -24,6 +24,7 @@ semver = { version = "1.0", default-features = false, optional = true, features 
 wgpu = { version = "30.0.1", optional = true }
 bytemuck = { version = "1.24", features = ["derive"], optional = true }
 futures-channel = { version = "0.3", optional = true }
+async-lock = { version = "3", optional = true }
 rayon = { version = "1.10", optional = true }
 
 [target.'cfg(any(target_arch = "x86", target_arch = "x86_64"))'.dependencies]
@@ -56,7 +57,7 @@ mcaptcha = ["protocol"]
 all-challenges = ["altcha", "anubis", "capjs", "cerberus", "goaway", "mcaptcha"]
 rayon = ["std", "dep:rayon", "capjs"]
 
-gpu = ["std", "compare-64bit", "dep:wgpu", "dep:bytemuck", "dep:futures-channel", "dep:sha1"]
+gpu = ["std", "compare-64bit", "dep:wgpu", "dep:bytemuck", "dep:futures-channel", "dep:sha1", "dep:async-lock"]
 
 [lints]
 workspace = true

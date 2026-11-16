@@ -320,7 +320,7 @@ pub(super) async fn solve_gpu(gpu: &GpuContext, challenge: Value) -> anyhow::Res
     let request = request(challenge)?;
     let puzzle = parse(request.encoded())?;
     let started = Instant::now();
-    let solver = FriendlyBlake2bGpu::new(gpu)?;
+    let mut solver = FriendlyBlake2bGpu::new(gpu)?;
     let mut bank_results = vec![None::<[u8; 8]>; usize::from(puzzle.solutions)];
     let mut attempts = 0u64;
     let batch_capacity = gpu_nonce_window(puzzle.threshold, solver.batch_capacity())?;
