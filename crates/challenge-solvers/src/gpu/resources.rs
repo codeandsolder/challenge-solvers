@@ -349,6 +349,8 @@ impl GpuContext {
             buffers,
             self.max_wgs,
             self.adapter.clone(),
+            #[cfg(not(target_arch = "wasm32"))]
+            self.poller.clone(),
         );
         context.dispatch_lock = self.dispatch_lock.clone();
         context
@@ -385,6 +387,8 @@ impl GpuContext {
 
             let pipelines = GpuPipelines::create(&device, false);
             let buffers = GpuBuffers::create(&device);
+            #[cfg(not(target_arch = "wasm32"))]
+            let poller = std::sync::Arc::new(super::NativeGpuPoller::new(device.clone())?);
             Ok(Self::from_resources(
                 device,
                 queue,
@@ -392,6 +396,8 @@ impl GpuContext {
                 buffers,
                 limits.max_compute_workgroups_per_dimension,
                 adapter_name,
+                #[cfg(not(target_arch = "wasm32"))]
+                poller,
             ))
         })
     }
@@ -403,12 +409,15 @@ impl GpuContext {
         buffers: GpuBuffers,
         max_wgs: u32,
         adapter: String,
+        #[cfg(not(target_arch = "wasm32"))] poller: std::sync::Arc<super::NativeGpuPoller>,
     ) -> Self {
         let bindings = GpuBindings::create(&device, &pipelines, &buffers);
         Self {
             device,
             queue,
             dispatch_lock: std::sync::Arc::new(async_lock::Mutex::new(())),
+            #[cfg(not(target_arch = "wasm32"))]
+            poller,
             pipeline: pipelines.anubis,
             in_buf: buffers.anubis_input,
             generic_pipeline: pipelines.generic,

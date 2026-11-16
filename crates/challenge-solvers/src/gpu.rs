@@ -35,6 +35,20 @@ use shaders::sha256_core_shader_source;
 mod dispatch;
 mod resources;
 
+#[cfg(not(target_arch = "wasm32"))]
+mod poller;
+#[cfg(not(target_arch = "wasm32"))]
+use poller::NativeGpuPoller;
+
+// Cancel a pending map before a newly scheduled GPU readback reuses its buffer.
+struct UnmapStagingOnDrop<'a>(&'a wgpu::Buffer);
+
+impl Drop for UnmapStagingOnDrop<'_> {
+    fn drop(&mut self) {
+        self.0.unmap();
+    }
+}
+
 use crate::{high_u32, low_u32};
 use sha2::{Digest, Sha256};
 
@@ -129,6 +143,8 @@ pub struct GpuContext {
     // SHA-family pipelines share input/output/staging buffers. Hold this lock
     // through full GPU readback, including across alternative-majority aliases.
     dispatch_lock: Arc<async_lock::Mutex<()>>,
+    #[cfg(not(target_arch = "wasm32"))]
+    poller: Arc<NativeGpuPoller>,
     pipeline: wgpu::ComputePipeline,
     in_buf: wgpu::Buffer,
     generic_pipeline: wgpu::ComputePipeline,

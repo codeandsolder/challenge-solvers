@@ -4,24 +4,13 @@
 //! implements its steady-state GPU methods.
 
 use super::{
-    COUNTER_SPACE, GpuContext, GpuError, GpuSolution, HASHES_PER_WG, Params, WG_SIZE,
-    counter_to_decimal_nonce, expected_work, gpu_batch_target, gpu_u32, gpu_usize_u32, high_u32,
-    low_u32, midstate, single_block_fast_compatible, single_block_search_space, verify,
+    COUNTER_SPACE, GpuContext, GpuError, GpuSolution, HASHES_PER_WG, Params, UnmapStagingOnDrop,
+    WG_SIZE, counter_to_decimal_nonce, expected_work, gpu_batch_target, gpu_u32, gpu_usize_u32,
+    high_u32, low_u32, midstate, single_block_fast_compatible, single_block_search_space, verify,
     verify_fast_single_block, verify_single_block,
 };
 use core::num::NonZeroU8;
 use std::vec::Vec;
-
-// GPU staging buffers must be unmapped even when a caller drops its future
-// during a pending map, poll failure, or map callback error. Otherwise the
-// next GPU submission against the staging buffer is invalid.
-struct UnmapStagingOnDrop<'a>(&'a wgpu::Buffer);
-
-impl Drop for UnmapStagingOnDrop<'_> {
-    fn drop(&mut self) {
-        self.0.unmap();
-    }
-}
 
 impl GpuContext {
     /// Submit a small representative batch to force lazy browser/driver shader setup.
@@ -712,9 +701,7 @@ impl GpuContext {
         let _unmap_on_drop = UnmapStagingOnDrop(staging);
 
         #[cfg(not(target_arch = "wasm32"))]
-        self.device
-            .poll(wgpu::PollType::wait_indefinitely())
-            .map_err(|e| GpuError::new(format!("poll GPU: {e}")))?;
+        self.poller.poll().await?;
 
         rx.await
             .map_err(|_| GpuError::new("GPU map callback dropped"))?

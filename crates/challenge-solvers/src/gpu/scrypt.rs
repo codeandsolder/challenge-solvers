@@ -10,7 +10,7 @@ use std::borrow::Cow;
 mod kdf;
 pub use kdf::ScryptKdfGpu;
 
-use super::{GpuContext, GpuError};
+use super::{GpuContext, GpuError, UnmapStagingOnDrop};
 
 /// Reusable scrypt `ROMix` pipeline, independent of proof-of-work protocols.
 ///
@@ -323,7 +323,7 @@ impl<'a> ScryptRomixGpu<'a> {
         }
         encoder.copy_buffer_to_buffer(&data, 0, &staging, 0, data_bytes);
         gpu.queue.submit([encoder.finish()]);
-        let output = readback_scrypt(device, &staging).await?;
+        let output = readback_scrypt(gpu, &staging).await?;
         let timing = match timestamps {
             Some(capture) => Some(capture.read(gpu).await?),
             None => None,
@@ -387,7 +387,7 @@ impl RomixTimestampCapture {
     }
 
     async fn read(self, gpu: &GpuContext) -> Result<ScryptRomixTimings, GpuError> {
-        let raw = readback_scrypt(&gpu.device, &self.readback).await?;
+        let raw = readback_scrypt(gpu, &self.readback).await?;
         let (chunks, remainder) = raw.as_chunks::<8>();
         if !remainder.is_empty() {
             return Err(GpuError::new("scrypt timestamp malformed byte count"));
@@ -409,7 +409,7 @@ impl RomixTimestampCapture {
 }
 
 pub(super) async fn readback_scrypt(
-    device: &wgpu::Device,
+    gpu: &GpuContext,
     staging: &wgpu::Buffer,
 ) -> Result<Vec<u8>, GpuError> {
     let slice = staging.slice(..);
@@ -417,10 +417,9 @@ pub(super) async fn readback_scrypt(
     slice.map_async(wgpu::MapMode::Read, move |result| {
         let _ = sender.send(result);
     });
+    let _unmap_on_drop = UnmapStagingOnDrop(staging);
     #[cfg(not(target_arch = "wasm32"))]
-    device
-        .poll(wgpu::PollType::wait_indefinitely())
-        .map_err(|e| GpuError::new(format!("poll scrypt GPU: {e}")))?;
+    gpu.poller.poll().await?;
     receiver
         .await
         .map_err(|_| GpuError::new("scrypt GPU map callback dropped"))?
@@ -430,6 +429,53 @@ pub(super) async fn readback_scrypt(
         .map_err(|e| GpuError::new(format!("read scrypt GPU output: {e}")))?;
     let output = mapped.to_vec();
     drop(mapped);
-    staging.unmap();
     Ok(output)
+}
+
+#[cfg(test)]
+mod readback_cancellation_tests {
+    use super::*;
+    use std::{
+        future::Future as _,
+        task::{Context, Waker},
+    };
+
+    #[test]
+    #[ignore = "requires a physical GPU"]
+    fn scrypt_kdf_matches_rfc7914_vector() -> anyhow::Result<()> {
+        let gpu = super::super::sha512_tests::block_on(GpuContext::create())?;
+        let kdf = ScryptKdfGpu::new(&gpu);
+        // RFC 7914 section 12: P="", S="", N=16, r=1, p=1, dkLen=64.
+        let expected: [u8; 64] = [
+            0x77, 0xd6, 0x57, 0x62, 0x38, 0x65, 0x7b, 0x20, 0x3b, 0x19, 0xca, 0x42, 0xc1, 0x8a,
+            0x04, 0x97, 0xf1, 0x6b, 0x48, 0x44, 0xe3, 0x07, 0x4a, 0xe8, 0xdf, 0xdf, 0xfa, 0x3f,
+            0xed, 0xe2, 0x14, 0x42, 0xfc, 0xd0, 0x06, 0x9d, 0xed, 0x09, 0x48, 0xf8, 0x32, 0x6a,
+            0x75, 0x3a, 0x0f, 0xc8, 0x1f, 0x17, 0xe8, 0xd3, 0xe0, 0xfb, 0x2e, 0x0d, 0x36, 0x28,
+            0xcf, 0x35, 0xe2, 0x0c, 0x38, 0xd1, 0x89, 0x06,
+        ];
+        let actual = super::super::sha512_tests::block_on(kdf.derive_key(b"", b"", 16, 1, 1, 64))?;
+        assert_eq!(actual, expected);
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "requires a physical GPU"]
+    fn canceled_scrypt_map_is_reusable() -> anyhow::Result<()> {
+        let gpu = super::super::sha512_tests::block_on(GpuContext::create())?;
+        let staging = gpu.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("canceled-scrypt-readback"),
+            size: 16,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        let mut first = Box::pin(readback_scrypt(&gpu, &staging));
+        let mut cx = Context::from_waker(Waker::noop());
+        let _ = first.as_mut().poll(&mut cx);
+        drop(first); // Pending map is canceled, releasing the buffer.
+
+        let data = super::super::sha512_tests::block_on(readback_scrypt(&gpu, &staging))?;
+        assert_eq!(data, [0; 16]);
+        Ok(())
+    }
 }
