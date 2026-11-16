@@ -727,3 +727,30 @@ impl GpuContext {
         Ok(values)
     }
 }
+
+#[cfg(test)]
+mod cancellation_tests {
+    use super::*;
+
+    #[test]
+    #[ignore = "requires a physical GPU"]
+    fn dropped_pending_map_is_unmapped_before_next_readback() -> anyhow::Result<()> {
+        let gpu = super::super::sha512_tests::block_on(GpuContext::create())?;
+        let staging = gpu.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("cancelled-staging-regression"),
+            size: 16,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+
+        // Emulate canceling read_staging's future after it registered the
+        // asynchronous map but before the GPU has completed its callback.
+        staging.slice(..).map_async(wgpu::MapMode::Read, |_| {});
+        drop(UnmapStagingOnDrop(&staging));
+
+        // The next user of this buffer must be able to map it again.
+        let result = super::super::sha512_tests::block_on(gpu.read_staging(&staging))?;
+        assert_eq!(result, [0; 4]);
+        Ok(())
+    }
+}
