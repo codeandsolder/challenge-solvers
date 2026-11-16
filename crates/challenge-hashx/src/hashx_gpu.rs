@@ -689,3 +689,61 @@ fn bswap(x:u32)->u32{{return((x&0xffu)<<24u)|((x&0xff00u)<<8u)|((x&0xff0000u)>>8
 "
     ))
 }
+
+#[cfg(test)]
+mod hardware_regressions {
+    use super::*;
+    use std::{
+        future::Future,
+        sync::Arc,
+        task::{Context, Poll, Wake, Waker},
+        time::Duration,
+    };
+
+    struct ThreadWake(std::thread::Thread);
+    impl Wake for ThreadWake {
+        fn wake(self: Arc<Self>) {
+            self.0.unpark();
+        }
+        fn wake_by_ref(self: &Arc<Self>) {
+            self.0.unpark();
+        }
+    }
+
+    fn block_on<F: Future>(future: F) -> F::Output {
+        let waker = Waker::from(Arc::new(ThreadWake(std::thread::current())));
+        let mut future = std::pin::pin!(future);
+        loop {
+            match future.as_mut().poll(&mut Context::from_waker(&waker)) {
+                Poll::Ready(result) => return result,
+                Poll::Pending => std::thread::park_timeout(Duration::from_millis(100)),
+            }
+        }
+    }
+
+    #[test]
+    #[ignore = "requires physical GPU with SHADER_INT64"]
+    fn every_gpu_implementation_matches_authoritative_hashwx() -> anyhow::Result<()> {
+        let mut solver = block_on(GpuSolver::create())?;
+        let implementations = solver.implementations();
+        anyhow::ensure!(
+            !implementations.is_empty(),
+            "HashX GPU reported no implementations"
+        );
+
+        for seed in ["00010203", "f9050000"] {
+            let challenge = Challenge {
+                data: seed.to_owned(),
+                difficulty: 8,
+            };
+            for implementation in &implementations {
+                let found = solver.solve_with_implementation(&challenge, Some(implementation))?;
+                anyhow::ensure!(
+                    crate::hashx::verify(&challenge, &found.answer)?,
+                    "HashX GPU backend {implementation} returned a result inconsistent with authoritative hashwx for seed {seed}"
+                );
+            }
+        }
+        Ok(())
+    }
+}
