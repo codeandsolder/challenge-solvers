@@ -356,6 +356,15 @@ pub fn valid_prefix(hash: &[u8; 32], difficulty: u32) -> bool {
         && (rem == 0 || hash[whole] & (0xff_u8 << (8 - rem)) == 0)
 }
 
+// The GPU result ABI reserves u32::MAX to mean "not found". If that value
+// is itself a winning nonce, the GPU cannot communicate the hit. After the
+// *entire* u32 search domain is exhausted, check just that final nonce with
+// the independently compiled CPU program. Normal searches pay no extra hash.
+#[cfg(feature = "gpu")]
+pub(crate) fn gpu_sentinel_nonce(hashx: &HashX, difficulty: u32) -> Option<u32> {
+    valid_prefix(&hashx.hash_bytes(u64::from(u32::MAX)), difficulty).then_some(u32::MAX)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -364,6 +373,25 @@ mod tests {
     fn valid_prefix_rejects_difficulty_wider_than_the_digest() {
         assert!(!valid_prefix(&[0_u8; 32], 257));
         assert!(valid_prefix(&[0_u8; 32], 256));
+    }
+
+    #[cfg(feature = "gpu")]
+    #[test]
+    fn last_gpu_nonce_is_recovered_when_it_meets_target() -> anyhow::Result<()> {
+        // Deterministically find a program for which the highest u32 nonce
+        // is valid at difficulty 1, then show that a harder target rejects it.
+        let mut found = None;
+        for seed in 0..32_u8 {
+            let (_, compiled, _) = build_compiled_seed(&[seed])?;
+            if compiled.hash_bytes(u64::from(u32::MAX))[0] & 0x80 == 0 {
+                found = Some(compiled);
+                break;
+            }
+        }
+        let hashx = found.context("expected a valid final nonce in 32 seeds")?;
+        assert_eq!(gpu_sentinel_nonce(&hashx, 1), Some(u32::MAX));
+        assert!(gpu_sentinel_nonce(&hashx, 64).is_none());
+        Ok(())
     }
 
     #[test]

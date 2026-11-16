@@ -1,5 +1,7 @@
 use cudarc::driver::CudaContext;
 
+use hashwx::HashX;
+
 use crate::{hashx::GpuProgram, hashx_sm75_cuda::Sm75Cuda};
 
 pub const SM75_SASS_IMPLEMENTATION: &str = "cuda-sm75-sass";
@@ -74,9 +76,14 @@ impl NativeGpuBackend {
         }
     }
 
-    pub(crate) fn solve(&mut self, program: &GpuProgram, difficulty: u32) -> anyhow::Result<u32> {
+    pub(crate) fn solve(
+        &mut self,
+        program: &GpuProgram,
+        hashx: &HashX,
+        difficulty: u32,
+    ) -> anyhow::Result<u32> {
         match self {
-            Self::Sm75(backend) => backend.solve(program, difficulty),
+            Self::Sm75(backend) => backend.solve(program, hashx, difficulty),
         }
     }
 }

@@ -5,9 +5,10 @@ use cudarc::{
     driver::{CudaContext, CudaSlice, CudaStream, LaunchConfig, PushKernelArg},
     nvrtc::Ptx,
 };
+use hashwx::HashX;
 
 use crate::{
-    hashx::{GpuProgram, difficulty_masks},
+    hashx::{GpuProgram, difficulty_masks, gpu_sentinel_nonce},
     hashx_sm75::{build_solve_cubin, template_solve_cubin},
 };
 
@@ -51,7 +52,12 @@ impl Sm75Cuda {
         &self.adapter
     }
 
-    pub(crate) fn solve(&mut self, program: &GpuProgram, difficulty: u32) -> anyhow::Result<u32> {
+    pub(crate) fn solve(
+        &mut self,
+        program: &GpuProgram,
+        hashx: &HashX,
+        difficulty: u32,
+    ) -> anyhow::Result<u32> {
         let cubin = build_solve_cubin(program)?;
         let module = self
             .context
@@ -86,7 +92,8 @@ impl Sm75Cuda {
             }
             base += u64::from(batch);
         }
-        Err(anyhow!("sm_75 HashX search exhausted u32 nonce space"))
+        gpu_sentinel_nonce(hashx, difficulty)
+            .ok_or_else(|| anyhow!("sm_75 HashX search exhausted u32 nonce space"))
     }
 
     #[expect(
