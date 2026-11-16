@@ -43,6 +43,19 @@ jobs:
         cargo test --locked -p challenge-hashx --no-default-features
         cargo test --locked -p anubis-argon2
 
+  miri:
+    name: Miri CPU memory model (Tree Borrows)
+    uses: codeandsolder/ci-workflows/.github/workflows/rust-sccache.yml@c6fcb5f8920460c109ee87152506c3d97889ed4e # main
+    with:
+      rust-toolchain: "nightly-2026-11-03"
+      rust-components: "miri,rust-src"
+      timeout-minutes: 15
+      command: |
+        export MIRIFLAGS="-Zmiri-tree-borrows"
+        cargo miri setup
+        cargo miri test --locked -p scrypt-fast --lib tests::small_workspace_reuse_matches_reference -- --exact
+        cargo miri test --locked -p challenge-solvers --no-default-features --features std,runtime-dispatch --lib sha256::sha_ni::layout_tests::portable_state_helpers_preserve_sha_ni_layout -- --exact
+
   strict-rust:
     name: Strict Rust policy
     uses: codeandsolder/rust-skills2/.github/workflows/strict-rust.yml@5b17a2f45f7a9934655e1d6de35e391c306c40d9 # main

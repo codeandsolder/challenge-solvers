@@ -196,6 +196,27 @@ mod tests {
             }
         }
     }
+    /// Small enough for Miri with Tree Borrows while exercising a reused
+    /// allocation across variable input lengths and distinct scrypt profiles.
+    #[test]
+    fn small_workspace_reuse_matches_reference() {
+        for (log_n, r, p) in [(1, 1, 1), (4, 2, 1)] {
+            let params = scrypt::Params::new(log_n, r, p).unwrap();
+            let mut workspace = Workspace::new(&params);
+            for (password, salt) in [
+                (&b""[..], &b""[..]),
+                (&b"abc"[..], &b"salt"[..]),
+                (&b"more-bytes"[..], &b"a-different-salt"[..]),
+            ] {
+                let mut result = [0; 32];
+                let mut reference = [0; 32];
+                workspace.derive(password, salt, &mut result).unwrap();
+                scrypt::scrypt(password, salt, &params, &mut reference).unwrap();
+                assert_eq!(result, reference);
+            }
+        }
+    }
+
     #[test]
     fn empty_output_is_rejected() {
         let params = scrypt::Params::new(4, 1, 1).unwrap();
