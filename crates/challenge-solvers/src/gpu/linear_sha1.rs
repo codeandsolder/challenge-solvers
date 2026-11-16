@@ -155,6 +155,9 @@ impl LinearSha1GpuSolver {
         &mut self,
         gpu: &GpuContext,
     ) -> Result<Option<LinearSha1Solution>, GpuError> {
+        // Shared SHA-family output and staging buffers must remain exclusive
+        // through every submitted batch and its readback.
+        let _gpu_guard = gpu.dispatch_lock.lock().await;
         let pipeline = gpu.cached_linear_sha1_pipeline();
         let params = gpu.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("linear-sha1-params"),
