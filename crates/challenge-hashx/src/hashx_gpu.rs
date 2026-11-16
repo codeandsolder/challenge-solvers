@@ -4,7 +4,7 @@ use anyhow::{Context, anyhow};
 use hashwx::HashX;
 
 use crate::{
-    hashx::{Answer, Challenge, GpuOp, Instr, describe, valid_prefix},
+    hashx::{Answer, Challenge, GpuOp, Instr, describe, gpu_sentinel_nonce, valid_prefix},
     hashx_gpu_native::NativeGpuBackend,
 };
 
@@ -279,7 +279,7 @@ impl GpuSolver {
                 && requested == native.implementation()
             {
                 let implementation = native.implementation();
-                let nonce = native.solve(&program, challenge.difficulty)?;
+                let nonce = native.solve(&program, &hashx, challenge.difficulty)?;
                 return validated_result(
                     &hashx,
                     nonce,
@@ -299,7 +299,7 @@ impl GpuSolver {
             let native_result = self.native_backend.as_mut().map(|backend| {
                 let implementation = backend.implementation();
                 backend
-                    .solve(&program, challenge.difficulty)
+                    .solve(&program, &hashx, challenge.difficulty)
                     .map(|nonce| (nonce, implementation))
             });
             match native_result {
@@ -398,7 +398,7 @@ impl GpuSolver {
             }
             base += u64::from(batch);
         }
-        Err(anyhow!("HashX GPU search exhausted u32 nonce space"))
+        Self::last_nonce_or_exhausted(hashx, challenge, started, implementation)
     }
 
     fn solve_specialized(
@@ -475,7 +475,18 @@ impl GpuSolver {
             }
             base += u64::from(batch);
         }
-        Err(anyhow!("HashX GPU search exhausted u32 nonce space"))
+        Self::last_nonce_or_exhausted(hashx, challenge, started, SPECIALIZED_IMPLEMENTATION)
+    }
+
+    fn last_nonce_or_exhausted(
+        hashx: &HashX,
+        challenge: &Challenge,
+        started: Instant,
+        implementation: &'static str,
+    ) -> anyhow::Result<GpuResult> {
+        let nonce = gpu_sentinel_nonce(hashx, challenge.difficulty)
+            .ok_or_else(|| anyhow!("HashX GPU search exhausted u32 nonce space"))?;
+        validated_result(hashx, nonce, challenge.difficulty, started, implementation)
     }
 
     fn write_params(&self, key: &[u64; 4], base: u64, difficulty: u32) {
