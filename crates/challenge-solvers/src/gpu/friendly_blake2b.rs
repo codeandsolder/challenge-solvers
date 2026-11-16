@@ -114,6 +114,10 @@ impl<'a> FriendlyBlake2bGpu<'a> {
     /// # Errors
     /// Rejects duplicate bank IDs, empty selections, nonce domain overflow,
     /// or invalid GPU workgroup counts. Device and readback failures propagate.
+    #[expect(
+        clippy::needless_pass_by_ref_mut,
+        reason = "exclusive scanner borrow prevents overlapping GPU staging maps and readbacks"
+    )]
     pub async fn scan_banks(
         &mut self,
         padded: &[u8; 128],

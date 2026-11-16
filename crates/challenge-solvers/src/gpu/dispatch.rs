@@ -12,6 +12,17 @@ use super::{
 use core::num::NonZeroU8;
 use std::vec::Vec;
 
+// GPU staging buffers must be unmapped even when a caller drops its future
+// during a pending map, poll failure, or map callback error. Otherwise the
+// next GPU submission against the staging buffer is invalid.
+struct UnmapStagingOnDrop<'a>(&'a wgpu::Buffer);
+
+impl Drop for UnmapStagingOnDrop<'_> {
+    fn drop(&mut self) {
+        self.0.unmap();
+    }
+}
+
 impl GpuContext {
     /// Submit a small representative batch to force lazy browser/driver shader setup.
     ///
@@ -695,6 +706,10 @@ impl GpuContext {
         slice.map_async(wgpu::MapMode::Read, move |result| {
             let _ = tx.send(result);
         });
+        // Created after map_async has entered the mapping state. Dropping the
+        // future must cancel the map *before* an exclusive dispatch lock can
+        // be handed to the next caller.
+        let _unmap_on_drop = UnmapStagingOnDrop(staging);
 
         #[cfg(not(target_arch = "wasm32"))]
         self.device
@@ -709,7 +724,6 @@ impl GpuContext {
             .map_err(|e| GpuError::new(format!("read mapped GPU result: {e}")))?;
         let values = bytemuck::cast_slice::<u8, u32>(&mapped).to_vec();
         drop(mapped);
-        staging.unmap();
         Ok(values)
     }
 }
