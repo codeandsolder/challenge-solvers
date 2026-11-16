@@ -180,6 +180,9 @@ impl Sha1DecimalGpuSolver {
         &mut self,
         gpu: &GpuContext,
     ) -> Result<Option<Sha1DecimalSolution>, GpuError> {
+        // Shared SHA-family output and staging buffers must remain exclusive
+        // through every submitted batch and its readback.
+        let _gpu_guard = gpu.dispatch_lock.lock().await;
         let pipeline = gpu.cached_sha1_decimal_pipeline();
         let input = gpu.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("sha1-decimal-params"),

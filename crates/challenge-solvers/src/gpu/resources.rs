@@ -342,14 +342,16 @@ impl GpuContext {
             output: self.out_buf.clone(),
             staging: self.staging.clone(),
         };
-        Self::from_resources(
+        let mut context = Self::from_resources(
             self.device.clone(),
             self.queue.clone(),
             pipelines,
             buffers,
             self.max_wgs,
             self.adapter.clone(),
-        )
+        );
+        context.dispatch_lock = self.dispatch_lock.clone();
+        context
     }
 
     fn create_with_timestamp_requirement(
@@ -406,6 +408,7 @@ impl GpuContext {
         Self {
             device,
             queue,
+            dispatch_lock: std::sync::Arc::new(async_lock::Mutex::new(())),
             pipeline: pipelines.anubis,
             in_buf: buffers.anubis_input,
             generic_pipeline: pipelines.generic,

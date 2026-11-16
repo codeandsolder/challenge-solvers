@@ -114,8 +114,12 @@ impl<'a> FriendlyBlake2bGpu<'a> {
     /// # Errors
     /// Rejects duplicate bank IDs, empty selections, nonce domain overflow,
     /// or invalid GPU workgroup counts. Device and readback failures propagate.
+    #[expect(
+        clippy::needless_pass_by_ref_mut,
+        reason = "exclusive scanner borrow prevents overlapping GPU staging maps and readbacks"
+    )]
     pub async fn scan_banks(
-        &self,
+        &mut self,
         padded: &[u8; 128],
         banks: &[u8],
         base: u32,
@@ -206,7 +210,7 @@ impl<'a> FriendlyBlake2bGpu<'a> {
     /// # Errors
     /// Propagates invalid work window, GPU dispatch and readback errors.
     pub async fn scan(
-        &self,
+        &mut self,
         padded: &[u8; 128],
         bank: u8,
         base: u32,
@@ -318,7 +322,7 @@ mod tests {
     #[ignore = "requires a physical SHADER_INT64 GPU"]
     fn friendly_blake2b_gpu_matches_independent_cpu() -> anyhow::Result<()> {
         let gpu = super::super::sha512_tests::block_on(GpuContext::create())?;
-        let solver = FriendlyBlake2bGpu::new(&gpu)?;
+        let mut solver = FriendlyBlake2bGpu::new(&gpu)?;
         let input = puzzle_input();
         for bank in [0, 1, 7, 255] {
             for base in [0, 1, 4_096, 65_534, u32::MAX - 127] {
@@ -421,7 +425,7 @@ mod tests {
         // GPU row grouping. Alternating the order avoids systematic GPU
         // frequency and thermal drift favoring one particular shape.
         let gpu = super::super::sha512_tests::block_on(GpuContext::create())?;
-        let solver = FriendlyBlake2bGpu::new(&gpu)?;
+        let mut solver = FriendlyBlake2bGpu::new(&gpu)?;
         let input = puzzle_input();
         for (banks_count, candidates, sizes) in [
             (255usize, 8_192u32, &[16usize, 32, 64, 128, 255][..]),
@@ -468,7 +472,7 @@ mod tests {
         const COUNT: u32 = 262_144;
         const ROUNDS: usize = 10;
         let gpu = super::super::sha512_tests::block_on(GpuContext::create())?;
-        let solver = FriendlyBlake2bGpu::new(&gpu)?;
+        let mut solver = FriendlyBlake2bGpu::new(&gpu)?;
         let input = puzzle_input();
         let banks: Vec<u8> = (0..16).collect();
         // Both cases perform the same 16*262144 BLAKE2b hashes, threshold 0.
@@ -511,7 +515,7 @@ mod tests {
     fn friendly_blake2b_gpu_fixed_work_vs_rustcrypto() -> anyhow::Result<()> {
         let gpu = super::super::sha512_tests::block_on(GpuContext::create())?;
         let start_init = Instant::now();
-        let solver = FriendlyBlake2bGpu::new(&gpu)?;
+        let mut solver = FriendlyBlake2bGpu::new(&gpu)?;
         let init_ms = start_init.elapsed().as_secs_f64() * 1e3;
         let input = puzzle_input();
         let bank = 3;

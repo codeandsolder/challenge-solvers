@@ -353,6 +353,9 @@ impl AltchaSha64GpuSolver {
         &mut self,
         gpu: &GpuContext,
     ) -> Result<Option<AltchaSha64Solution>, GpuError> {
+        // Shared SHA-family output and staging buffers must remain exclusive
+        // through every submitted batch and its readback.
+        let _gpu_guard = gpu.dispatch_lock.lock().await;
         if !gpu.device.features().contains(wgpu::Features::SHADER_INT64) {
             return Err(GpuError::new(
                 "selected GPU device has no SHADER_INT64 feature",

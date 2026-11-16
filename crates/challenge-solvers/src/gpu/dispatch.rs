@@ -12,6 +12,17 @@ use super::{
 use core::num::NonZeroU8;
 use std::vec::Vec;
 
+// GPU staging buffers must be unmapped even when a caller drops its future
+// during a pending map, poll failure, or map callback error. Otherwise the
+// next GPU submission against the staging buffer is invalid.
+struct UnmapStagingOnDrop<'a>(&'a wgpu::Buffer);
+
+impl Drop for UnmapStagingOnDrop<'_> {
+    fn drop(&mut self) {
+        self.0.unmap();
+    }
+}
+
 impl GpuContext {
     /// Submit a small representative batch to force lazy browser/driver shader setup.
     ///
@@ -28,6 +39,7 @@ impl GpuContext {
         params.words[11] = u32::MAX;
         params.words[12] = u32::MAX;
         params.words[13] = 8192; // Exercise the fast kernel in the warmup workgroup.
+        let _gpu_guard = self.dispatch_lock.lock().await;
         self.queue.write_buffer(&self.out_buf, 0, &[0; 48]);
         self.queue
             .write_buffer(&self.in_buf, 0, bytemuck::bytes_of(&params));
@@ -133,7 +145,7 @@ impl GpuContext {
         {
             // Threshold zero ensures a no-result warmup; it still exercises
             // the actual hash shader with a complete 64-lane workgroup.
-            let solver = super::FriendlyBlake2bGpu::new(self)?;
+            let mut solver = super::FriendlyBlake2bGpu::new(self)?;
             let found = solver.scan(&[0u8; 128], 0, 0, WG_SIZE, 0).await?;
             if found.is_some() {
                 return Err(GpuError::new(
@@ -230,6 +242,7 @@ impl GpuContext {
         params.words[10] = bitlen;
         params.words[11] = high_u32(mask);
         params.words[12] = low_u32(mask);
+        let _gpu_guard = self.dispatch_lock.lock().await;
         self.queue.write_buffer(&self.out_buf, 0, &[0; 48]);
 
         let expected = 16_u64.saturating_pow(u32::from(difficulty.get()));
@@ -358,6 +371,7 @@ impl GpuContext {
         } else {
             0
         };
+        let _gpu_guard = self.dispatch_lock.lock().await;
         self.queue.write_buffer(&self.out_buf, 0, &[0; 48]);
 
         let desired = gpu_batch_target(
@@ -450,6 +464,7 @@ impl GpuContext {
         params[32] = u32::from(TYPE);
         params[33] = u32::from(message.no_trailing_zeros)
             | (u32::from(cfg!(feature = "compare-64bit")) << 1);
+        let _gpu_guard = self.dispatch_lock.lock().await;
         self.queue.write_buffer(&self.out_buf, 0, &[0; 48]);
 
         let desired = gpu_batch_target(expected_work::<TYPE>(target, mask), HASHES_PER_WG);
@@ -512,6 +527,7 @@ impl GpuContext {
         params: &[u32; 64],
         workgroups: u32,
     ) -> Result<Option<(u64, [u32; 8])>, GpuError> {
+        let _gpu_guard = self.dispatch_lock.lock().await;
         self.queue.write_buffer(&self.out_buf, 0, &[0; 48]);
         self.queue
             .write_buffer(&self.generic_in_buf, 0, bytemuck::cast_slice(params));
@@ -567,6 +583,7 @@ impl GpuContext {
         params: &[u32; 64],
         workgroups: u32,
     ) -> Result<Option<(u64, [u32; 8])>, GpuError> {
+        let _gpu_guard = self.dispatch_lock.lock().await;
         self.queue.write_buffer(&self.out_buf, 0, &[0; 48]);
         self.queue
             .write_buffer(&self.generic_in_buf, 0, bytemuck::cast_slice(params));
@@ -629,6 +646,7 @@ impl GpuContext {
             })
         });
         let input = variable_buffer.as_ref().unwrap_or(&self.generic_in_buf);
+        let _gpu_guard = self.dispatch_lock.lock().await;
         self.queue.write_buffer(&self.out_buf, 0, &[0; 48]);
         self.queue
             .write_buffer(input, 0, bytemuck::cast_slice(params));
@@ -688,6 +706,10 @@ impl GpuContext {
         slice.map_async(wgpu::MapMode::Read, move |result| {
             let _ = tx.send(result);
         });
+        // Created after map_async has entered the mapping state. Dropping the
+        // future must cancel the map *before* an exclusive dispatch lock can
+        // be handed to the next caller.
+        let _unmap_on_drop = UnmapStagingOnDrop(staging);
 
         #[cfg(not(target_arch = "wasm32"))]
         self.device
@@ -702,7 +724,33 @@ impl GpuContext {
             .map_err(|e| GpuError::new(format!("read mapped GPU result: {e}")))?;
         let values = bytemuck::cast_slice::<u8, u32>(&mapped).to_vec();
         drop(mapped);
-        staging.unmap();
         Ok(values)
+    }
+}
+
+#[cfg(test)]
+mod cancellation_tests {
+    use super::*;
+
+    #[test]
+    #[ignore = "requires a physical GPU"]
+    fn dropped_pending_map_is_unmapped_before_next_readback() -> anyhow::Result<()> {
+        let gpu = super::super::sha512_tests::block_on(GpuContext::create())?;
+        let staging = gpu.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("cancelled-staging-regression"),
+            size: 16,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+
+        // Emulate canceling read_staging's future after it registered the
+        // asynchronous map but before the GPU has completed its callback.
+        staging.slice(..).map_async(wgpu::MapMode::Read, |_| {});
+        drop(UnmapStagingOnDrop(&staging));
+
+        // The next user of this buffer must be able to map it again.
+        let result = super::super::sha512_tests::block_on(gpu.read_staging(&staging))?;
+        assert_eq!(result, [0; 4]);
+        Ok(())
     }
 }
