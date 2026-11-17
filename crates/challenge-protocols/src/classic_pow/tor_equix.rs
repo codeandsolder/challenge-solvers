@@ -13,7 +13,7 @@ use std::{
     time::Instant,
 };
 
-use anyhow::{Context, ensure};
+use anyhow::{Context, bail, ensure};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use blake2::{Blake2b, Digest, digest::consts::U4};
 use equix::{EquiX, Error as EquixError, HashError, SolverMemory};
