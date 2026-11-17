@@ -29,11 +29,12 @@ fn altcha_solver(
     implementation: Implementation,
     message: AltchaMessage,
 ) -> anyhow::Result<Box<dyn DynPow>> {
-    ensure!(
-        !matches!(implementation, Implementation::ShaNi),
-        "ALTCHA has no SHA-NI backend"
-    );
-    require_x86_feature(implementation)?;
+    if matches!(implementation, Implementation::ShaNi) {
+        return Err(super::invalid_request(anyhow::anyhow!(
+            "ALTCHA has no SHA-NI backend"
+        )));
+    }
+    require_x86_feature(implementation).map_err(super::invalid_request)?;
     match implementation {
         Implementation::Auto => Ok(Box::new(AltchaSha256Solver::from(message))),
         Implementation::Safe => Ok(Box::new(
@@ -47,7 +48,9 @@ fn altcha_solver(
         Implementation::Avx512 => Ok(Box::new(
             challenge_solvers::solver::x86::Avx512AltchaSha256Solver::from(message),
         )),
-        _ => bail!("implementation unavailable for ALTCHA"),
+        _ => Err(super::invalid_request(anyhow::anyhow!(
+            "implementation unavailable for ALTCHA"
+        ))),
     }
 }
 

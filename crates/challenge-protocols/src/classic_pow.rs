@@ -333,7 +333,9 @@ fn decimal_solver(
                 reason = "all solver implementations in this match are available on x86_64"
             )
         )]
-        _ => bail!("implementation unavailable on this target"),
+        _ => Err(invalid_request(anyhow!(
+            "implementation unavailable on this target"
+        ))),
     }
 }
 
@@ -345,10 +347,11 @@ pub fn binary_solver(
     implementation: Implementation,
     message: challenge_solvers::message::BinaryMessage,
 ) -> anyhow::Result<Box<dyn DynPow>> {
-    ensure!(
-        !matches!(implementation, Implementation::ShaNi),
-        "binary SHA-256 has no SHA-NI backend"
-    );
+    if matches!(implementation, Implementation::ShaNi) {
+        return Err(invalid_request(anyhow!(
+            "binary SHA-256 has no SHA-NI backend"
+        )));
+    }
     require_x86_feature(implementation).map_err(invalid_request)?;
     match implementation {
         Implementation::Auto => Ok(Box::new(challenge_solvers::BinarySolver::from(message))),
@@ -363,7 +366,9 @@ pub fn binary_solver(
         Implementation::Avx512 => Ok(Box::new(
             challenge_solvers::solver::x86::Avx512BinarySolver::from(message),
         )),
-        _ => bail!("implementation unavailable for binary SHA-256"),
+        _ => Err(invalid_request(anyhow!(
+            "implementation unavailable for binary SHA-256"
+        ))),
     }
 }
 
@@ -396,7 +401,9 @@ fn goaway_solver(
                 reason = "all solver implementations in this match are available on x86_64"
             )
         )]
-        _ => bail!("implementation unavailable on this target"),
+        _ => Err(invalid_request(anyhow!(
+            "implementation unavailable on this target"
+        ))),
     }
 }
 
@@ -421,7 +428,9 @@ fn cerberus_solver(
         Implementation::Avx512 => Ok(Box::new(
             challenge_solvers::solver::x86::Avx512CerberusSolver::from(message),
         )),
-        _ => bail!("implementation unavailable for Cerberus"),
+        _ => Err(invalid_request(anyhow!(
+            "implementation unavailable for Cerberus"
+        ))),
     }
 }
 
