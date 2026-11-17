@@ -55,25 +55,64 @@ struct CapV2HashWx {
     n: u32,
 }
 
+fn parse_cap_v1(challenge: Value) -> anyhow::Result<CapJsChallenge> {
+    (|| {
+        let descriptor: CapJsChallenge =
+            serde_json::from_value(challenge).context("invalid Cap.js challenge")?;
+        let rules = descriptor.rules();
+        // Bounds that were formerly rechecked inside the hash-search loop
+        // should reject before the first potentially expensive subchallenge.
+        rules
+            .mask()
+            .context("Cap.js difficulty exceeds the supported 64-bit target width")?;
+        if rules.count > 0 {
+            let index = rules.count - 1;
+            u32::try_from(index)
+                .context("Cap.js subchallenge index exceeds u32")?
+                .checked_add(1)
+                .context("Cap.js subchallenge index overflow")?;
+        }
+        Ok(descriptor)
+    })()
+    .map_err(super::invalid_request)
+}
+
 /// Reject an unsupported challenge before spending CPU time on any earlier
 /// subchallenge in a mixed format-2 envelope. Both CPU and GPU routes use this
 /// same preflight so neither can partially execute a challenge we cannot solve.
 fn parse_cap_v2_envelope(challenge: Value) -> anyhow::Result<CapV2Envelope> {
-    let envelope: CapV2Envelope =
-        serde_json::from_value(challenge).context("invalid Cap.js format-2 challenge")?;
-    ensure!(envelope.format == 2, "invalid Cap.js format-2 marker");
-    ensure!(
-        !envelope.challenges.is_empty(),
-        "Cap.js format-2 challenge list is empty"
-    );
-    ensure!(
-        !envelope
-            .challenges
-            .iter()
-            .any(|challenge| matches!(challenge, CapV2Challenge::Instrumentation { .. })),
-        "Cap.js instrumentation is a browser-environment probe, not a proof-of-work mode"
-    );
-    Ok(envelope)
+    (|| {
+        let envelope: CapV2Envelope =
+            serde_json::from_value(challenge).context("invalid Cap.js format-2 challenge")?;
+        ensure!(envelope.format == 2, "invalid Cap.js format-2 marker");
+        ensure!(
+            !envelope.challenges.is_empty(),
+            "Cap.js format-2 challenge list is empty"
+        );
+        ensure!(
+            !envelope
+                .challenges
+                .iter()
+                .any(|challenge| matches!(challenge, CapV2Challenge::Instrumentation { .. })),
+            "Cap.js instrumentation is a browser-environment probe, not a proof-of-work mode"
+        );
+        for subchallenge in &envelope.challenges {
+            match subchallenge {
+                CapV2Challenge::Sha256Pow { payload } => {
+                    cap_v2_prefix(&payload.target)?;
+                }
+                CapV2Challenge::Rsw { payload } => {
+                    validate_rsw(payload)?;
+                }
+                CapV2Challenge::HashWx { payload } => {
+                    validate_hashwx(payload)?;
+                }
+                CapV2Challenge::Instrumentation { .. } => unreachable!("rejected above"),
+            }
+        }
+        Ok(envelope)
+    })()
+    .map_err(super::invalid_request)
 }
 
 /// Validate a complete format-2 envelope for a caller that may split work
@@ -113,8 +152,7 @@ pub(super) fn solve(challenge: Value, implementation: Implementation) -> anyhow:
     if challenge.get("format").and_then(Value::as_u64) == Some(2) {
         return solve_capjs_v2(challenge, implementation);
     }
-    let descriptor: CapJsChallenge =
-        serde_json::from_value(challenge).context("invalid Cap.js challenge")?;
+    let descriptor = parse_cap_v1(challenge)?;
     let rules = *descriptor.rules();
     let token = descriptor.token;
     let emitter = CapJSEmitter::new(token.as_bytes());
@@ -220,11 +258,16 @@ fn repeated_mod_squaring(
     Ok(value)
 }
 
-fn solve_cap_v2_rsw(payload: &CapV2Rsw) -> anyhow::Result<Value> {
+fn validate_rsw(payload: &CapV2Rsw) -> anyhow::Result<(Integer, Integer)> {
     ensure!(payload.t > 0, "Cap.js RSW iteration count must be positive");
     let modulus = parse_rsw_hex(&payload.modulus).context("invalid Cap.js RSW modulus")?;
     let value = parse_rsw_hex(&payload.x).context("invalid Cap.js RSW input")?;
     ensure!(modulus > 1, "Cap.js RSW modulus is too small");
+    Ok((modulus, value))
+}
+
+fn solve_cap_v2_rsw(payload: &CapV2Rsw) -> anyhow::Result<Value> {
+    let (modulus, value) = validate_rsw(payload)?;
     let result = repeated_mod_squaring(value, &modulus, payload.t)?;
     Ok(json!({ "y": result.to_string_radix(16) }))
 }
@@ -236,7 +279,7 @@ fn hashwx_seed(challenge: &[u8; 32], block: u64) -> [u8; 32] {
     digest.finalize().into()
 }
 
-fn solve_cap_v2_hashwx(payload: &CapV2HashWx) -> anyhow::Result<(Value, u64)> {
+fn validate_hashwx(payload: &CapV2HashWx) -> anyhow::Result<[u8; 32]> {
     ensure!(
         payload.d > 0 && payload.d <= 1_000_000_000,
         "Cap.js HashWX difficulty out of range"
@@ -246,9 +289,13 @@ fn solve_cap_v2_hashwx(payload: &CapV2HashWx) -> anyhow::Result<(Value, u64)> {
         "Cap.js HashWX nonces-per-hash out of range"
     );
     let challenge = hex::decode(&payload.c).context("invalid Cap.js HashWX challenge hex")?;
-    let challenge: [u8; 32] = challenge
+    challenge
         .try_into()
-        .map_err(|_| anyhow!("Cap.js HashWX challenge must be 32 bytes"))?;
+        .map_err(|_| anyhow!("Cap.js HashWX challenge must be 32 bytes"))
+}
+
+fn solve_cap_v2_hashwx(payload: &CapV2HashWx) -> anyhow::Result<(Value, u64)> {
+    let challenge = validate_hashwx(payload)?;
     let target = u64::MAX / payload.d;
     let per_seed = u64::from(payload.n);
     let mut current_block = 0_u64;
@@ -456,8 +503,7 @@ pub(super) async fn solve_gpu(
     if challenge.get("format").and_then(Value::as_u64) == Some(2) {
         return solve_capjs_v2_gpu(gpu, challenge).await;
     }
-    let descriptor: CapJsChallenge =
-        serde_json::from_value(challenge).context("invalid Cap.js challenge")?;
+    let descriptor = parse_cap_v1(challenge)?;
     let rules = *descriptor.rules();
     let token = descriptor.token.clone();
     let emitter = CapJSEmitter::new(token.as_bytes());

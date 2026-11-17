@@ -1,21 +1,16 @@
-use std::{
-    num::{NonZeroU8, NonZeroU64},
-    time::Instant,
-};
+use std::{num::NonZeroU8, time::Instant};
 
-use anyhow::{Context, anyhow, bail, ensure};
+use anyhow::{Context, anyhow, bail};
 use challenge_solvers::{
-    build_mcaptcha_prefix,
-    cerberus::ChallengeDescriptor as CerberusChallenge,
-    compute_mask_goaway, compute_mask_zero_nibbles, compute_target_mcaptcha, extract128_be,
-    goaway::GoAwayConfig,
-    message::{DecimalMessage, GoAwayMessage},
+    compute_mask_goaway, compute_mask_zero_nibbles, extract128_be,
+    message::DecimalMessage,
     solver::{SOLVE_TYPE_GT, SOLVE_TYPE_LEADING_ZERO_BITS, SOLVE_TYPE_MASK},
 };
 use serde_json::{Value, json};
 
 use super::{
-    DEFAULT_LIMIT, HaphashChallenge, McaptchaRequest, Result, encode_words_le, finish_goaway,
+    DEFAULT_LIMIT, Result, encode_words_le, finish_goaway, parse_cerberus, parse_goaway,
+    parse_haphash, parse_mcaptcha,
 };
 
 /// Solve a classic proof-of-work protocol using the shared GPU context.
@@ -45,12 +40,7 @@ async fn solve_cerberus_gpu(
     gpu: &challenge_solvers::gpu::GpuContext,
     challenge: Value,
 ) -> anyhow::Result<Result> {
-    let descriptor: CerberusChallenge =
-        serde_json::from_value(challenge).context("invalid Cerberus challenge")?;
-    ensure!(
-        descriptor.difficulty().get() <= 16,
-        "Cerberus difficulty above 16 dubits is unsupported by upstream clients"
-    );
+    let descriptor = parse_cerberus(challenge)?;
     let started = Instant::now();
     let mut solution = None;
     let mut attempted_nonces = 0_u64;
@@ -85,24 +75,12 @@ async fn solve_goaway_gpu(
     gpu: &challenge_solvers::gpu::GpuContext,
     challenge: Value,
 ) -> anyhow::Result<Result> {
-    let config: GoAwayConfig =
-        serde_json::from_value(challenge).context("invalid go-away challenge")?;
-    ensure!(
-        config.difficulty() <= 256,
-        "go-away difficulty above the 256-bit SHA-256 digest width is unsatisfiable"
-    );
+    let (config, mut message) = parse_goaway(challenge)?;
     let accelerated_mask = u8::try_from(config.difficulty())
         .ok()
         .and_then(NonZeroU8::new)
         .filter(|difficulty| difficulty.get() <= 64)
         .map(compute_mask_goaway);
-    let challenge_bytes: [u8; 64] = config
-        .challenge()
-        .as_bytes()
-        .try_into()
-        .context("go-away challenge must be exactly 64 bytes")?;
-    let mut message =
-        GoAwayMessage::new_hex(&challenge_bytes, 0).context("invalid go-away hex challenge")?;
     let started = Instant::now();
     let mut attempted_nonces = 0_u64;
     let mut solution = None;
@@ -136,14 +114,8 @@ async fn solve_haphash_gpu(
     gpu: &challenge_solvers::gpu::GpuContext,
     challenge: Value,
 ) -> anyhow::Result<Result> {
-    let challenge: HaphashChallenge =
-        serde_json::from_value(challenge).context("invalid haphash challenge")?;
-    ensure!(
-        challenge.difficulty <= 64,
-        "haphash difficulty above the 64-nibble SHA-256 digest width is unsatisfiable"
-    );
+    let challenge = parse_haphash(challenge)?;
     let prefix = challenge.prefix.as_bytes();
-    ensure!(!prefix.is_empty(), "haphash prefix must not be empty");
     let fast_mask = if challenge.difficulty == 0 {
         Some(0)
     } else {
@@ -189,14 +161,7 @@ async fn solve_mcaptcha_gpu(
     gpu: &challenge_solvers::gpu::GpuContext,
     challenge: Value,
 ) -> anyhow::Result<Result> {
-    let request: McaptchaRequest =
-        serde_json::from_value(challenge).context("invalid mCaptcha request")?;
-    let difficulty_factor = NonZeroU64::new(u64::from(request.config.difficulty_factor))
-        .context("mCaptcha difficulty factor must be positive")?;
-    let mut prefix = Vec::new();
-    build_mcaptcha_prefix(&mut prefix, &request.config.string, &request.config.salt)
-        .context("mCaptcha string length exceeds the wire format")?;
-    let target = compute_target_mcaptcha(difficulty_factor);
+    let (request, prefix, target) = parse_mcaptcha(challenge)?;
     let started = Instant::now();
     let mut attempted_nonces = 0_u64;
     for bank in 0_u32.. {

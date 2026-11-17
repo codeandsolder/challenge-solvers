@@ -41,61 +41,64 @@ struct Parsed {
 }
 
 fn parse(challenge: &Value) -> anyhow::Result<Parsed> {
-    let encoded = match challenge {
-        Value::String(text) => text.as_str(),
-        Value::Object(fields) => fields
-            .get("challenge")
-            .and_then(Value::as_str)
-            .context("PoW Bot Deterrent expects a base64 challenge string")?,
-        _ => bail!("PoW Bot Deterrent expects a base64 challenge string or challenge object"),
-    };
-    let payload = STANDARD
-        .decode(encoded)
-        .context("PoW Bot Deterrent challenge is not valid base64")?;
-    let challenge: Challenge =
-        serde_json::from_slice(&payload).context("invalid PoW Bot Deterrent JSON challenge")?;
+    (|| {
+        let encoded = match challenge {
+            Value::String(text) => text.as_str(),
+            Value::Object(fields) => fields
+                .get("challenge")
+                .and_then(Value::as_str)
+                .context("PoW Bot Deterrent expects a base64 challenge string")?,
+            _ => bail!("PoW Bot Deterrent expects a base64 challenge string or challenge object"),
+        };
+        let payload = STANDARD
+            .decode(encoded)
+            .context("PoW Bot Deterrent challenge is not valid base64")?;
+        let challenge: Challenge =
+            serde_json::from_slice(&payload).context("invalid PoW Bot Deterrent JSON challenge")?;
 
-    // The official verifier compares *the last len(d) hexadecimal digits*,
-    // not a numeric interpretation of the full Scrypt output.
-    ensure!(
-        challenge.d.bytes().all(|byte| byte.is_ascii_hexdigit()),
-        "PoW Bot Deterrent difficulty must contain hexadecimal digits"
-    );
-    ensure!(
-        challenge.d.len() <= challenge.klen.saturating_mul(2),
-        "PoW Bot Deterrent difficulty exceeds derived key length"
-    );
-    ensure!(
-        challenge.klen > 0,
-        "PoW Bot Deterrent key length must be nonzero"
-    );
-    let log_n = challenge
-        .cpu_memory_cost
-        .checked_ilog2()
-        .filter(|_| challenge.cpu_memory_cost.is_power_of_two())
-        .context("PoW Bot Deterrent N must be a power of two")?;
-    let params = scrypt::Params::new(
-        u8::try_from(log_n).context("PoW Bot Deterrent N is too large")?,
-        challenge.r,
-        challenge.p,
-    )
-    .context("invalid PoW Bot Deterrent Scrypt parameters")?;
-    let preimage: [u8; 8] = STANDARD
-        .decode(challenge.i)
-        .context("PoW Bot Deterrent preimage is not valid base64")?
-        .try_into()
-        .map_err(|_| anyhow::anyhow!("PoW Bot Deterrent preimage must be exactly 8 bytes"))?;
-    // Validate metadata, but don't use dl in the proof threshold: the original
-    // server checks only d and the full Scrypt parameters.
-    // Difficulty level is metadata; the server enforces the encoded `d` threshold.
-    let _ = challenge.dl;
-    Ok(Parsed {
-        original: encoded.to_owned(),
-        params,
-        preimage,
-        difficulty: challenge.d,
-        key_len: challenge.klen,
-    })
+        // The official verifier compares *the last len(d) hexadecimal digits*,
+        // not a numeric interpretation of the full Scrypt output.
+        ensure!(
+            challenge.d.bytes().all(|byte| byte.is_ascii_hexdigit()),
+            "PoW Bot Deterrent difficulty must contain hexadecimal digits"
+        );
+        ensure!(
+            challenge.d.len() <= challenge.klen.saturating_mul(2),
+            "PoW Bot Deterrent difficulty exceeds derived key length"
+        );
+        ensure!(
+            challenge.klen > 0,
+            "PoW Bot Deterrent key length must be nonzero"
+        );
+        let log_n = challenge
+            .cpu_memory_cost
+            .checked_ilog2()
+            .filter(|_| challenge.cpu_memory_cost.is_power_of_two())
+            .context("PoW Bot Deterrent N must be a power of two")?;
+        let params = scrypt::Params::new(
+            u8::try_from(log_n).context("PoW Bot Deterrent N is too large")?,
+            challenge.r,
+            challenge.p,
+        )
+        .context("invalid PoW Bot Deterrent Scrypt parameters")?;
+        let preimage: [u8; 8] = STANDARD
+            .decode(challenge.i)
+            .context("PoW Bot Deterrent preimage is not valid base64")?
+            .try_into()
+            .map_err(|_| anyhow::anyhow!("PoW Bot Deterrent preimage must be exactly 8 bytes"))?;
+        // Validate metadata, but don't use dl in the proof threshold: the original
+        // server checks only d and the full Scrypt parameters.
+        // Difficulty level is metadata; the server enforces the encoded `d` threshold.
+        let _ = challenge.dl;
+        Ok(Parsed {
+            original: encoded.to_owned(),
+            params,
+            preimage,
+            difficulty: challenge.d,
+            key_len: challenge.klen,
+        })
+    })()
+    .map_err(super::invalid_request)
 }
 
 fn nonce_hex(nonce: u64) -> String {
@@ -271,10 +274,11 @@ pub(super) fn solve(
     implementation: Implementation,
     worker_count: usize,
 ) -> anyhow::Result<Result> {
-    ensure!(
-        matches!(implementation, Implementation::Auto | Implementation::Safe),
-        "PoW Bot Deterrent supports only auto/safe CPU implementations"
-    );
+    if !matches!(implementation, Implementation::Auto | Implementation::Safe) {
+        bail!(super::InvalidRequest(anyhow::anyhow!(
+            "PoW Bot Deterrent supports only auto/safe CPU implementations"
+        )));
+    }
     ensure!(
         worker_count > 0,
         "PoW Bot Deterrent needs at least one CPU worker"

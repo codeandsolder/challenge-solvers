@@ -13,7 +13,7 @@ use std::{
     time::Instant,
 };
 
-use anyhow::{Context, ensure};
+use anyhow::{Context, bail, ensure};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use blake2::{Blake2b, Digest, digest::consts::U4};
 use equix::{EquiX, Error as EquixError, HashError, SolverMemory};
@@ -184,27 +184,42 @@ fn search_worker(
     Ok(attempts)
 }
 
+fn parse_request(challenge: Value) -> anyhow::Result<(Parameters, Option<[u8; 16]>)> {
+    (|| {
+        let request: Request =
+            serde_json::from_value(challenge).context("invalid Tor v1 Equi-X challenge")?;
+        let params = Parameters::new(&request.blinded_id, &request.seed_b64, request.effort)?;
+        let nonce = request
+            .nonce
+            .map(|encoded| -> anyhow::Result<[u8; 16]> {
+                hex::decode(encoded)
+                    .context("invalid Tor starting nonce hex")?
+                    .try_into()
+                    .map_err(|_| anyhow::anyhow!("Tor starting nonce must be 16 bytes"))
+            })
+            .transpose()?;
+        Ok((params, nonce))
+    })()
+    .map_err(super::invalid_request)
+}
+
 pub(super) fn solve(
     challenge: Value,
     implementation: Implementation,
     worker_count: usize,
 ) -> anyhow::Result<Result> {
-    ensure!(
-        matches!(implementation, Implementation::Auto | Implementation::Safe),
-        "Tor Equi-X supports only auto/safe CPU selectors"
-    );
+    if !matches!(implementation, Implementation::Auto | Implementation::Safe) {
+        bail!(super::InvalidRequest(anyhow::anyhow!(
+            "Tor Equi-X supports only auto/safe CPU selectors"
+        )));
+    }
     ensure!(
         worker_count > 0,
         "Tor Equi-X requires at least one CPU worker"
     );
-    let request: Request =
-        serde_json::from_value(challenge).context("invalid Tor v1 Equi-X challenge")?;
-    let params = Parameters::new(&request.blinded_id, &request.seed_b64, request.effort)?;
-    let nonce: [u8; 16] = if let Some(encoded) = request.nonce {
-        hex::decode(encoded)
-            .context("invalid Tor starting nonce hex")?
-            .try_into()
-            .map_err(|_| anyhow::anyhow!("Tor starting nonce must be 16 bytes"))?
+    let (params, specified_nonce) = parse_request(challenge)?;
+    let nonce = if let Some(nonce) = specified_nonce {
+        nonce
     } else {
         let mut nonce = [0_u8; 16];
         getrandom::fill(&mut nonce)

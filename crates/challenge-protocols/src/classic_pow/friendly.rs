@@ -39,6 +39,7 @@ impl PuzzleInput {
 fn request(challenge: Value) -> anyhow::Result<PuzzleInput> {
     serde_json::from_value(challenge)
         .context("Friendly Captcha request must be a puzzle string or {puzzle: string}")
+        .map_err(super::invalid_request)
 }
 
 struct Puzzle<'a> {
@@ -64,35 +65,38 @@ fn threshold(difficulty: u8) -> anyhow::Result<u32> {
 }
 
 fn parse(puzzle: &str) -> anyhow::Result<Puzzle<'_>> {
-    let (signature, encoded) = puzzle
-        .split_once('.')
-        .context("Friendly Captcha puzzle must be signature.base64")?;
-    ensure!(!signature.is_empty(), "Friendly Captcha signature is empty");
-    let bytes = STANDARD
-        .decode(encoded)
-        .context("invalid Friendly Captcha puzzle base64")?;
-    ensure!(
-        (32..=64).contains(&bytes.len()),
-        "Friendly Captcha v1 puzzle must contain 32..=64 bytes"
-    );
-    ensure!(
-        bytes[12] == 1,
-        "unsupported Friendly Captcha puzzle version {}",
-        bytes[12]
-    );
-    ensure!(
-        bytes[14] > 0,
-        "Friendly Captcha solution count must be nonzero"
-    );
-    let mut padded = [0_u8; 128];
-    padded[..bytes.len()].copy_from_slice(&bytes);
-    Ok(Puzzle {
-        signature,
-        encoded,
-        padded,
-        solutions: bytes[14],
-        threshold: threshold(bytes[15])?,
-    })
+    (|| {
+        let (signature, encoded) = puzzle
+            .split_once('.')
+            .context("Friendly Captcha puzzle must be signature.base64")?;
+        ensure!(!signature.is_empty(), "Friendly Captcha signature is empty");
+        let bytes = STANDARD
+            .decode(encoded)
+            .context("invalid Friendly Captcha puzzle base64")?;
+        ensure!(
+            (32..=64).contains(&bytes.len()),
+            "Friendly Captcha v1 puzzle must contain 32..=64 bytes"
+        );
+        ensure!(
+            bytes[12] == 1,
+            "unsupported Friendly Captcha puzzle version {}",
+            bytes[12]
+        );
+        ensure!(
+            bytes[14] > 0,
+            "Friendly Captcha solution count must be nonzero"
+        );
+        let mut padded = [0_u8; 128];
+        padded[..bytes.len()].copy_from_slice(&bytes);
+        Ok(Puzzle {
+            signature,
+            encoded,
+            padded,
+            solutions: bytes[14],
+            threshold: threshold(bytes[15])?,
+        })
+    })()
+    .map_err(super::invalid_request)
 }
 
 const fn diagnostics(seconds: u16) -> [u8; 3] {
@@ -185,10 +189,11 @@ pub(super) fn solve(
     implementation: Implementation,
     worker_count: usize,
 ) -> anyhow::Result<Result> {
-    ensure!(
-        matches!(implementation, Implementation::Auto | Implementation::Safe),
-        "Friendly Captcha BLAKE2b supports only auto and safe CPU implementations"
-    );
+    if !matches!(implementation, Implementation::Auto | Implementation::Safe) {
+        anyhow::bail!(super::InvalidRequest(anyhow::anyhow!(
+            "Friendly Captcha BLAKE2b supports only auto and safe CPU implementations"
+        )));
+    }
     let request = request(challenge)?;
     let puzzle = parse(request.encoded())?;
     let started = Instant::now();

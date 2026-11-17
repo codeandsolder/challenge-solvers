@@ -29,11 +29,12 @@ fn altcha_solver(
     implementation: Implementation,
     message: AltchaMessage,
 ) -> anyhow::Result<Box<dyn DynPow>> {
-    ensure!(
-        !matches!(implementation, Implementation::ShaNi),
-        "ALTCHA has no SHA-NI backend"
-    );
-    require_x86_feature(implementation)?;
+    if matches!(implementation, Implementation::ShaNi) {
+        return Err(super::invalid_request(anyhow::anyhow!(
+            "ALTCHA has no SHA-NI backend"
+        )));
+    }
+    require_x86_feature(implementation).map_err(super::invalid_request)?;
     match implementation {
         Implementation::Auto => Ok(Box::new(AltchaSha256Solver::from(message))),
         Implementation::Safe => Ok(Box::new(
@@ -47,7 +48,9 @@ fn altcha_solver(
         Implementation::Avx512 => Ok(Box::new(
             challenge_solvers::solver::x86::Avx512AltchaSha256Solver::from(message),
         )),
-        _ => bail!("implementation unavailable for ALTCHA"),
+        _ => Err(super::invalid_request(anyhow::anyhow!(
+            "implementation unavailable for ALTCHA"
+        ))),
     }
 }
 
@@ -86,6 +89,35 @@ fn altcha_counter_mode(challenge: &Value) -> anyhow::Result<AltchaCounterMode> {
     }
 }
 
+fn parse_altcha_v2(challenge: Value) -> anyhow::Result<(AltchaCounterMode, AltchaChallenge)> {
+    (|| {
+        let counter_mode = altcha_counter_mode(&challenge)?;
+        let parsed: AltchaChallenge =
+            serde_json::from_value(challenge).context("invalid ALTCHA v2 challenge")?;
+        let params = &parsed.parameters;
+        hex::decode(&params.nonce).context("invalid ALTCHA nonce hex")?;
+        hex::decode(&params.salt).context("invalid ALTCHA salt hex")?;
+        let prefix = AltchaHexPrefix::parse(&params.key_prefix)?;
+        match params.algorithm.to_ascii_uppercase().as_str() {
+            "SHA-256" | "SHA-384" | "SHA-512" | "PBKDF2/SHA-256" | "PBKDF2/SHA-384"
+            | "PBKDF2/SHA-512" => {}
+            "SCRYPT" => {
+                altcha_scrypt_parameters(params)?;
+            }
+            "ARGON2ID" => {
+                altcha_argon2_parameters(params)?;
+                ensure!(
+                    prefix.0.len() <= params.key_length.saturating_mul(2),
+                    "ALTCHA Argon2id keyPrefix exceeds derived key length"
+                );
+            }
+            other => bail!("unsupported ALTCHA algorithm: {other}"),
+        }
+        Ok((counter_mode, parsed))
+    })()
+    .map_err(super::invalid_request)
+}
+
 pub(super) fn solve(
     challenge: Value,
     implementation: Implementation,
@@ -94,24 +126,24 @@ pub(super) fn solve(
     if challenge.get("parameters").is_none() {
         return solve_altcha_v1(challenge, implementation);
     }
-    let counter_mode = altcha_counter_mode(&challenge)?;
-    let official: AltchaChallenge =
-        serde_json::from_value(challenge).context("invalid ALTCHA v2 challenge")?;
+    let (counter_mode, official) = parse_altcha_v2(challenge)?;
 
     if counter_mode == AltchaCounterMode::String {
-        ensure!(
-            matches!(implementation, Implementation::Auto | Implementation::Safe),
-            "ALTCHA string-counter mode supports auto/safe implementations only"
-        );
+        if !matches!(implementation, Implementation::Auto | Implementation::Safe) {
+            bail!(super::InvalidRequest(anyhow::anyhow!(
+                "ALTCHA string-counter mode supports auto/safe implementations only"
+            )));
+        }
         return solve_altcha_generic(&official, counter_mode, worker_count);
     }
     if let Some(result) = try_solve_altcha_fast(&official, implementation)? {
         return Ok(result);
     }
-    ensure!(
-        matches!(implementation, Implementation::Auto | Implementation::Safe),
-        "this ALTCHA algorithm supports auto/safe implementations only"
-    );
+    if !matches!(implementation, Implementation::Auto | Implementation::Safe) {
+        bail!(super::InvalidRequest(anyhow::anyhow!(
+            "this ALTCHA algorithm supports auto/safe implementations only"
+        )));
+    }
     solve_altcha_generic(&official, counter_mode, worker_count)
 }
 
@@ -459,22 +491,25 @@ pub(super) fn memory_requirement(challenge: &Value) -> Option<anyhow::Result<u64
     if !algorithm.eq_ignore_ascii_case("SCRYPT") && !algorithm.eq_ignore_ascii_case("ARGON2ID") {
         return None;
     }
-    Some((|| {
-        let parsed: AltchaChallenge =
-            serde_json::from_value(challenge.clone()).context("invalid ALTCHA KDF challenge")?;
-        let p = parsed.parameters;
-        if algorithm.eq_ignore_ascii_case("ARGON2ID") {
-            let params = altcha_argon2_parameters(&p)?;
-            let arena = u64::from(params.memory_blocks())
-                .checked_mul(1024)
-                .context("ALTCHA Argon2id arena size overflow")?;
-            return arena
-                .checked_add(u64::try_from(p.key_length)?)
-                .context("ALTCHA Argon2id output size overflow");
-        }
-        let params = altcha_scrypt_parameters(&p)?;
-        super::scrypt_memory_bytes(&params, p.key_length)
-    })())
+    Some(
+        (|| {
+            let parsed: AltchaChallenge = serde_json::from_value(challenge.clone())
+                .context("invalid ALTCHA KDF challenge")?;
+            let p = parsed.parameters;
+            if algorithm.eq_ignore_ascii_case("ARGON2ID") {
+                let params = altcha_argon2_parameters(&p)?;
+                let arena = u64::from(params.memory_blocks())
+                    .checked_mul(1024)
+                    .context("ALTCHA Argon2id arena size overflow")?;
+                return arena
+                    .checked_add(u64::try_from(p.key_length)?)
+                    .context("ALTCHA Argon2id output size overflow");
+            }
+            let params = altcha_scrypt_parameters(&p)?;
+            super::scrypt_memory_bytes(&params, p.key_length)
+        })()
+        .map_err(super::invalid_request),
+    )
 }
 
 fn altcha_derive_key(
@@ -741,27 +776,30 @@ struct AltchaV1Challenge {
 }
 
 fn parse_altcha_v1(challenge: Value) -> anyhow::Result<AltchaV1Challenge> {
-    let challenge: AltchaV1Challenge =
-        serde_json::from_value(challenge).context("invalid ALTCHA v1 challenge")?;
-    let digest_length = match challenge.algorithm.as_str() {
-        "SHA-1" => 40,
-        "SHA-256" => 64,
-        "SHA-512" => 128,
-        other => bail!("unsupported ALTCHA v1 algorithm: {other}"),
-    };
-    ensure!(
-        !challenge.signature.is_empty(),
-        "ALTCHA v1 signature must not be empty"
-    );
-    // The CPU protocol compares lowercase *hex strings*, not decoded bytes.
-    // Decode/re-encode parity prevents GPU from accepting noncanonical hex.
-    ensure!(
-        challenge.challenge.len() == digest_length
-            && hex::decode(&challenge.challenge)
-                .is_ok_and(|bytes| hex::encode(bytes) == challenge.challenge),
-        "ALTCHA v1 challenge must be a canonical lowercase full digest"
-    );
-    Ok(challenge)
+    (|| {
+        let challenge: AltchaV1Challenge =
+            serde_json::from_value(challenge).context("invalid ALTCHA v1 challenge")?;
+        let digest_length = match challenge.algorithm.as_str() {
+            "SHA-1" => 40,
+            "SHA-256" => 64,
+            "SHA-512" => 128,
+            other => bail!("unsupported ALTCHA v1 algorithm: {other}"),
+        };
+        ensure!(
+            !challenge.signature.is_empty(),
+            "ALTCHA v1 signature must not be empty"
+        );
+        // The CPU protocol compares lowercase *hex strings*, not decoded bytes.
+        // Decode/re-encode parity prevents GPU from accepting noncanonical hex.
+        ensure!(
+            challenge.challenge.len() == digest_length
+                && hex::decode(&challenge.challenge)
+                    .is_ok_and(|bytes| hex::encode(bytes) == challenge.challenge),
+            "ALTCHA v1 challenge must be a canonical lowercase full digest"
+        );
+        Ok(challenge)
+    })()
+    .map_err(super::invalid_request)
 }
 
 #[cfg(feature = "gpu")]
@@ -856,10 +894,11 @@ async fn solve_altcha_v1_gpu(
 }
 
 fn solve_altcha_v1(challenge: Value, implementation: Implementation) -> anyhow::Result<Result> {
-    ensure!(
-        matches!(implementation, Implementation::Auto | Implementation::Safe),
-        "ALTCHA v1 supports auto/safe implementations only"
-    );
+    if !matches!(implementation, Implementation::Auto | Implementation::Safe) {
+        bail!(super::InvalidRequest(anyhow::anyhow!(
+            "ALTCHA v1 supports auto/safe implementations only"
+        )));
+    }
     let challenge = parse_altcha_v1(challenge)?;
     let max = challenge.maxnumber.unwrap_or(1_000_000);
     let started = Instant::now();
@@ -954,16 +993,14 @@ pub(super) async fn solve_gpu(
     if challenge.get("parameters").is_none() {
         return solve_altcha_v1_gpu(gpu, challenge).await;
     }
-    let counter_mode = altcha_counter_mode(&challenge)?;
-    let challenge: AltchaChallenge =
-        serde_json::from_value(challenge).context("invalid ALTCHA v2 challenge")?;
+    let (counter_mode, challenge) = parse_altcha_v2(challenge)?;
     let AltchaGpuCase {
         input,
         prefix,
         target,
         mask,
         key_length,
-    } = altcha_gpu_case(&challenge)?;
+    } = altcha_gpu_case(&challenge).map_err(super::invalid_request)?;
     let mut solver = match input {
         AltchaGpuInput::Sha64(solver) => {
             return solve_sha64_gpu(gpu, solver, &prefix, counter_mode).await;
