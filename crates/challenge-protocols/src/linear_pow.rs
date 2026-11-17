@@ -25,10 +25,11 @@ pub fn solve(
     implementation: Implementation,
 ) -> anyhow::Result<Result> {
     let (challenge, offset) = parse_challenge(challenge)?;
-    ensure!(
-        matches!(implementation, Implementation::Auto),
-        "Linear.pub CPU uses RustCrypto SHA-1 and exposes only the auto implementation"
-    );
+    if !matches!(implementation, Implementation::Auto) {
+        return Err(crate::classic_pow::invalid_request(anyhow::anyhow!(
+            "Linear.pub CPU uses RustCrypto SHA-1 and exposes only the auto implementation"
+        )));
+    }
 
     let started = Instant::now();
     let (nonce, attempted_nonces) =
@@ -51,21 +52,25 @@ pub fn solve(
 }
 
 fn parse_challenge(challenge: serde_json::Value) -> anyhow::Result<(Challenge, usize)> {
-    let challenge: Challenge =
-        serde_json::from_value(challenge).context("invalid Linear.pub challenge")?;
-    ensure!(
-        challenge.seed.len() == 40 && challenge.seed.as_bytes().iter().all(u8::is_ascii_hexdigit),
-        "Linear.pub seed must be exactly 40 ASCII hex characters"
-    );
-    let offset = challenge
-        .seed
-        .as_bytes()
-        .first()
-        .and_then(|byte| (*byte as char).to_digit(16))
-        .and_then(|value| usize::try_from(value).ok())
-        .context("Linear.pub seed must begin with a hex digit")?;
-    ensure!(offset + 1 < 20, "Linear.pub digest offset is out of range");
-    Ok((challenge, offset))
+    (|| {
+        let challenge: Challenge =
+            serde_json::from_value(challenge).context("invalid Linear.pub challenge")?;
+        ensure!(
+            challenge.seed.len() == 40
+                && challenge.seed.as_bytes().iter().all(u8::is_ascii_hexdigit),
+            "Linear.pub seed must be exactly 40 ASCII hex characters"
+        );
+        let offset = challenge
+            .seed
+            .as_bytes()
+            .first()
+            .and_then(|byte| (*byte as char).to_digit(16))
+            .and_then(|value| usize::try_from(value).ok())
+            .context("Linear.pub seed must begin with a hex digit")?;
+        ensure!(offset + 1 < 20, "Linear.pub digest offset is out of range");
+        Ok((challenge, offset))
+    })()
+    .map_err(crate::classic_pow::invalid_request)
 }
 
 /// Solve a Linear.pub SHA-1 challenge using baseline WGPU, independently

@@ -1,4 +1,5 @@
 use std::{
+    fmt,
     num::{NonZeroU8, NonZeroU64},
     time::Instant,
 };
@@ -41,6 +42,28 @@ pub struct Result {
     pub answer: Value,
     pub solve_ms: f64,
     pub implementation: String,
+}
+
+/// Client-supplied protocol data or selected implementation is invalid.
+///
+/// Deliberately not used for device failures, nonce exhaustion or resource admission.
+#[derive(Debug)]
+pub struct InvalidRequest(anyhow::Error);
+
+impl fmt::Display for InvalidRequest {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(&self.0, f)
+    }
+}
+
+impl std::error::Error for InvalidRequest {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(self.0.as_ref())
+    }
+}
+
+pub(crate) fn invalid_request(error: anyhow::Error) -> anyhow::Error {
+    InvalidRequest(error).into()
 }
 
 /// Validate a complete Cap.js format-2 envelope before CPU/GPU splitting.
@@ -89,6 +112,74 @@ struct HaphashChallenge {
     difficulty: u8,
 }
 
+// The CPU and GPU routes share these exact input parsers.
+fn parse_cerberus(challenge: Value) -> anyhow::Result<CerberusChallenge> {
+    (|| {
+        let descriptor: CerberusChallenge =
+            serde_json::from_value(challenge).context("invalid Cerberus challenge")?;
+        ensure!(
+            descriptor.difficulty().get() <= 16,
+            "Cerberus difficulty above 16 dubits is unsupported by upstream clients"
+        );
+        Ok(descriptor)
+    })()
+    .map_err(invalid_request)
+}
+
+fn parse_goaway(challenge: Value) -> anyhow::Result<(GoAwayConfig, GoAwayMessage)> {
+    (|| {
+        let config: GoAwayConfig =
+            serde_json::from_value(challenge).context("invalid go-away challenge")?;
+        ensure!(
+            config.challenge().len() == 64,
+            "go-away challenge must be exactly 64 characters"
+        );
+        ensure!(
+            config.difficulty() <= 256,
+            "go-away difficulty above the 256-bit SHA-256 digest width is unsatisfiable"
+        );
+        let bytes: [u8; 64] = config
+            .challenge()
+            .as_bytes()
+            .try_into()
+            .context("go-away challenge must be exactly 64 bytes")?;
+        let message = GoAwayMessage::new_hex(&bytes, 0).context("invalid go-away hex challenge")?;
+        Ok((config, message))
+    })()
+    .map_err(invalid_request)
+}
+
+fn parse_haphash(challenge: Value) -> anyhow::Result<HaphashChallenge> {
+    (|| {
+        let challenge: HaphashChallenge =
+            serde_json::from_value(challenge).context("invalid haphash challenge")?;
+        ensure!(
+            challenge.difficulty <= 64,
+            "haphash difficulty above the 64-nibble SHA-256 digest width is unsatisfiable"
+        );
+        ensure!(
+            !challenge.prefix.is_empty(),
+            "haphash prefix must not be empty"
+        );
+        Ok(challenge)
+    })()
+    .map_err(invalid_request)
+}
+
+fn parse_mcaptcha(challenge: Value) -> anyhow::Result<(McaptchaRequest, Vec<u8>, u64)> {
+    (|| {
+        let request: McaptchaRequest =
+            serde_json::from_value(challenge).context("invalid mCaptcha request")?;
+        let difficulty = NonZeroU64::new(u64::from(request.config.difficulty_factor))
+            .context("mCaptcha difficulty factor must be positive")?;
+        let mut prefix = Vec::new();
+        build_mcaptcha_prefix(&mut prefix, &request.config.string, &request.config.salt)
+            .context("mCaptcha string length exceeds the wire format")?;
+        Ok((request, prefix, compute_target_mcaptcha(difficulty)))
+    })()
+    .map_err(invalid_request)
+}
+
 /// Solve one supported classic `PoW` protocol, returning protocol-native JSON.
 ///
 /// # Errors
@@ -104,7 +195,8 @@ pub fn solve(
         worker_count > 0,
         "classic solver worker count must be nonzero"
     );
-    let implementation = Implementation::parse(implementation.unwrap_or("auto"))?;
+    let implementation =
+        Implementation::parse(implementation.unwrap_or("auto")).map_err(invalid_request)?;
     match kind {
         "cerberus" => solve_cerberus(challenge, implementation),
         "goaway" => solve_goaway(challenge, implementation),
@@ -216,7 +308,7 @@ fn decimal_solver(
     implementation: Implementation,
     message: DecimalMessage,
 ) -> anyhow::Result<Box<dyn DynPow>> {
-    require_x86_feature(implementation)?;
+    require_x86_feature(implementation).map_err(invalid_request)?;
     match implementation {
         Implementation::Auto => Ok(Box::new(DecimalSolver::from(message))),
         Implementation::Safe => Ok(Box::new(
@@ -257,7 +349,7 @@ pub fn binary_solver(
         !matches!(implementation, Implementation::ShaNi),
         "binary SHA-256 has no SHA-NI backend"
     );
-    require_x86_feature(implementation)?;
+    require_x86_feature(implementation).map_err(invalid_request)?;
     match implementation {
         Implementation::Auto => Ok(Box::new(challenge_solvers::BinarySolver::from(message))),
         Implementation::Safe => Ok(Box::new(
@@ -279,7 +371,7 @@ fn goaway_solver(
     implementation: Implementation,
     message: GoAwayMessage,
 ) -> anyhow::Result<Box<dyn DynPow>> {
-    require_x86_feature(implementation)?;
+    require_x86_feature(implementation).map_err(invalid_request)?;
     match implementation {
         Implementation::Auto => Ok(Box::new(challenge_solvers::GoAwaySolver::from(message))),
         Implementation::Safe => Ok(Box::new(
@@ -312,11 +404,10 @@ fn cerberus_solver(
     implementation: Implementation,
     message: CerberusMessage,
 ) -> anyhow::Result<Box<dyn DynPow>> {
-    ensure!(
-        !matches!(implementation, Implementation::ShaNi),
-        "Cerberus has no SHA-NI backend"
-    );
-    require_x86_feature(implementation)?;
+    if matches!(implementation, Implementation::ShaNi) {
+        return Err(invalid_request(anyhow!("Cerberus has no SHA-NI backend")));
+    }
+    require_x86_feature(implementation).map_err(invalid_request)?;
     match implementation {
         Implementation::Auto => Ok(Box::new(challenge_solvers::CerberusSolver::from(message))),
         Implementation::Safe => Ok(Box::new(
@@ -335,12 +426,7 @@ fn cerberus_solver(
 }
 
 fn solve_cerberus(challenge: Value, implementation: Implementation) -> anyhow::Result<Result> {
-    let descriptor: CerberusChallenge =
-        serde_json::from_value(challenge).context("invalid Cerberus challenge")?;
-    ensure!(
-        descriptor.difficulty().get() <= 16,
-        "Cerberus difficulty above 16 dubits is unsupported by upstream clients"
-    );
+    let descriptor = parse_cerberus(challenge)?;
     let started = Instant::now();
     let mut solution = None;
     let mut attempted_nonces = 0_u64;
@@ -399,28 +485,12 @@ fn finish_goaway(
 }
 
 fn solve_goaway(challenge: Value, implementation: Implementation) -> anyhow::Result<Result> {
-    let config: GoAwayConfig =
-        serde_json::from_value(challenge).context("invalid go-away challenge")?;
-    ensure!(
-        config.challenge().len() == 64,
-        "go-away challenge must be exactly 64 characters"
-    );
-    ensure!(
-        config.difficulty() <= 256,
-        "go-away difficulty above the 256-bit SHA-256 digest width is unsatisfiable"
-    );
+    let (config, mut message) = parse_goaway(challenge)?;
     let accelerated_mask = u8::try_from(config.difficulty())
         .ok()
         .and_then(NonZeroU8::new)
         .filter(|difficulty| difficulty.get() <= 64)
         .map(compute_mask_goaway);
-    let challenge_bytes: [u8; 64] = config
-        .challenge()
-        .as_bytes()
-        .try_into()
-        .context("go-away challenge must be exactly 64 bytes")?;
-    let mut message =
-        GoAwayMessage::new_hex(&challenge_bytes, 0).context("invalid go-away hex challenge")?;
     let started = Instant::now();
     let mut attempted_nonces = 0_u64;
     let mut solution = None;
@@ -449,14 +519,8 @@ fn solve_goaway(challenge: Value, implementation: Implementation) -> anyhow::Res
 }
 
 fn solve_haphash(challenge: Value, implementation: Implementation) -> anyhow::Result<Result> {
-    let challenge: HaphashChallenge =
-        serde_json::from_value(challenge).context("invalid haphash challenge")?;
-    ensure!(
-        challenge.difficulty <= 64,
-        "haphash difficulty above the 64-nibble SHA-256 digest width is unsatisfiable"
-    );
+    let challenge = parse_haphash(challenge)?;
     let prefix = challenge.prefix.as_bytes();
-    ensure!(!prefix.is_empty(), "haphash prefix must not be empty");
     let fast_mask = if challenge.difficulty == 0 {
         Some(0)
     } else {
@@ -497,14 +561,7 @@ fn solve_haphash(challenge: Value, implementation: Implementation) -> anyhow::Re
 }
 
 fn solve_mcaptcha(challenge: Value, implementation: Implementation) -> anyhow::Result<Result> {
-    let request: McaptchaRequest =
-        serde_json::from_value(challenge).context("invalid mCaptcha request")?;
-    let difficulty_factor = NonZeroU64::new(u64::from(request.config.difficulty_factor))
-        .context("mCaptcha difficulty factor must be positive")?;
-    let mut prefix = Vec::new();
-    build_mcaptcha_prefix(&mut prefix, &request.config.string, &request.config.salt)
-        .context("mCaptcha string length exceeds the wire format")?;
-    let target = compute_target_mcaptcha(difficulty_factor);
+    let (request, prefix, target) = parse_mcaptcha(challenge)?;
     let started = Instant::now();
     let mut attempted_nonces = 0_u64;
 
@@ -547,6 +604,90 @@ fn encode_words_le(words: [u32; 8]) -> String {
             .flat_map(u32::to_le_bytes)
             .collect::<Vec<_>>(),
     )
+}
+
+#[cfg(test)]
+mod invalid_request_tests {
+    use super::*;
+    use sha2::Digest as _;
+
+    #[test]
+    fn malformed_classic_input_provenance_covers_all_protocols() {
+        let cases = [
+            ("cerberus", json!({"difficulty": 99})),
+            ("goaway", json!({"challenge": "invalid"})),
+            ("haphash", json!({"prefix": "p", "difficulty": 65})),
+            (
+                "mcaptcha",
+                json!({"config": {"difficulty_factor": 0}, "key": "key"}),
+            ),
+            ("capjs", json!({"token": "x", "rules": {"difficulty": 900}})),
+            (
+                "capjs",
+                json!({"token": "x", "format": 2, "challenges": [
+                    {"protocol": "rsw", "payload": {"N": "11", "x": "2", "t": 1}},
+                    {"protocol": "sha256-pow", "payload": {"salt": "x", "target": "xyz"}}
+                ]}),
+            ),
+            (
+                "capjs",
+                json!({"token": "x", "format": 2, "challenges": [
+                    {"protocol": "hashwx", "payload": {"c": "not hex", "d": 1, "n": 1}}
+                ]}),
+            ),
+            ("friendlycaptcha", json!("not-a-valid-puzzle")),
+            (
+                "altcha",
+                json!({"algorithm": "SHA-256", "challenge": "not a digest", "salt": "x", "signature": "s"}),
+            ),
+            (
+                "altcha",
+                json!({"parameters": {"algorithm": "SCRYPT", "cost": 15,
+                "keyLength": 16, "keyPrefix": "", "nonce": "00", "salt": "00"}}),
+            ),
+            (
+                "tor-hs-v1",
+                json!({"blinded_id": "bad", "seed_b64": "bad", "effort": 1}),
+            ),
+            ("pow-bot-deterrent", json!("not base64")),
+            ("linear", json!({"seed": "not hex"})),
+        ];
+        for (kind, challenge) in cases {
+            let err = solve(kind, challenge, Some("safe"), 1)
+                .expect_err("malformed protocol payload must fail");
+            assert!(
+                err.is::<InvalidRequest>(),
+                "{kind} invalid request escaped without a typed marker: {err:#}"
+            );
+        }
+    }
+
+    #[test]
+    fn invalid_selectors_are_request_errors_and_runtime_exhaustion_is_not() {
+        let selector =
+            solve("goaway", json!({}), Some("not-a-backend"), 1).expect_err("unsupported selector");
+        assert!(selector.is::<InvalidRequest>());
+        // One negative attempt with a valid challenge. Failure is compute
+        // exhaustion, not malformed client data.
+        let digest = hex::encode(sha2::Sha256::digest(b"different"));
+        let exhausted = solve(
+            "altcha",
+            json!({
+                "algorithm": "SHA-256",
+                "challenge": digest,
+                "maxnumber": 0,
+                "salt": "valid",
+                "signature": "signed"
+            }),
+            Some("safe"),
+            1,
+        )
+        .expect_err("single candidate must not solve");
+        assert!(
+            !exhausted.is::<InvalidRequest>(),
+            "nonce exhaustion was mistaken for a bad request: {exhausted:#}"
+        );
+    }
 }
 
 #[cfg(test)]
