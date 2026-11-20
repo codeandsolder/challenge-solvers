@@ -20,7 +20,7 @@ num-traits = "0.2"
 argon2-rust = { version = "1.1.0", default-features = false, features = ["std"] }
 anubis-argon2 = { path = "../anubis-argon2" }
 challenge-solvers = { path = "../challenge-solvers", default-features = false, features = ["std", "runtime-dispatch", "all-challenges"] }
-hashwx = { git = "https://github.com/codeandsolder/hashwx-rs", rev = "18ac274f3b6e66a33fd9f1c4884978e7e3c89cab", default-features = false, features = ["native", "hashx"] }
+hashwx = { git = "https://github.com/codeandsolder/hashwx-rs", rev = "cbee7de3d3b69a6575861e015e1bc5697fdd27c5", default-features = false, features = ["native", "hashx"] }
 hex = "0.4"
 itoa = "1"
 pbkdf2 = "0.13"

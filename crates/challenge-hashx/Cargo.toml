@@ -13,7 +13,7 @@ gpu = ["dep:bytemuck", "dep:cudarc", "dep:tracing", "dep:wgpu"]
 
 [dependencies]
 anyhow = "1"
-hashwx = { git = "https://github.com/codeandsolder/hashwx-rs", rev = "18ac274f3b6e66a33fd9f1c4884978e7e3c89cab", default-features = false, features = ["native", "hashx"] }
+hashwx = { git = "https://github.com/codeandsolder/hashwx-rs", rev = "cbee7de3d3b69a6575861e015e1bc5697fdd27c5", default-features = false, features = ["native", "hashx"] }
 hex = "0.4"
 serde = { version = "1", features = ["derive"] }
 bytemuck = { version = "1", features = ["derive"], optional = true }
