@@ -58,7 +58,7 @@ jobs:
 
   strict-rust:
     name: Strict Rust policy
-    uses: codeandsolder/rust-skills2/.github/workflows/strict-rust.yml@1732f9bf2e6edb7a983afc9bf175acbbe488f456 # main
+    uses: codeandsolder/rust-skills2/.github/workflows/strict-rust.yml@998dcbfa4da43cc6419474d96ee69a7102e7957c # main
     with:
       cargo-args: "--locked --workspace --all-targets --all-features"
       ban-python-outside-ci: true
