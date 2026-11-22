@@ -37,7 +37,7 @@ pub use sha256::K32 as SHA256_ROUND_CONSTANTS;
 /// The remaining partial block is intentionally left unprocessed: callers
 /// building nonce-dependent suffixes must supply their own SHA-256 padding.
 /// This function returns the chaining state, not a finalized SHA-256 digest.
-#[must_use]
+#[must_use = "the computed midstate is returned rather than updating caller state"]
 pub fn sha256_full_block_midstate(bytes: &[u8]) -> [u32; 8] {
     let mut state = SHA256_INITIAL_STATE;
     for block in bytes.as_chunks::<64>().0 {
@@ -237,14 +237,14 @@ pub fn build_mcaptcha_prefix<E: Extend<u8>>(out: &mut E, string: &str, salt: &st
 }
 
 /// Compute the target for an mCaptcha `PoW`
-#[must_use]
+#[must_use = "the returned target defines the comparison constraint"]
 pub const fn compute_target_mcaptcha(difficulty_factor: NonZeroU64) -> u64 {
     let difficulty_factor = difficulty_factor.get();
     u64::MAX - u64::MAX / difficulty_factor
 }
 
 /// Compute a leading-zero-nibble SHA-256 mask (mask & (V\[0] << 32 | V\[1]) == 0)
-#[must_use]
+#[must_use = "the returned mask defines the comparison constraint"]
 pub const fn compute_mask_zero_nibbles(difficulty_factor: NonZeroU8) -> u64 {
     let bits = difficulty_factor.get().saturating_mul(4);
     if bits >= 64 {
@@ -366,7 +366,7 @@ pub fn solve_decimal_sha256_zero_nibbles(
 /// Test the full SHA-256 digest against go-away's leading-zero-bit rule.
 ///
 /// Difficulties above 256 are unsatisfiable because SHA-256 has only 256 bits.
-#[must_use]
+#[must_use = "the returned verification decision must be checked"]
 pub fn goaway_hash_matches_difficulty(hash: &[u32; 8], difficulty: u16) -> bool {
     hash_has_leading_zero_bits(hash, u64::from(difficulty))
 }
@@ -376,7 +376,7 @@ pub fn goaway_hash_matches_difficulty(hash: &[u32; 8], difficulty: u16) -> bool 
 /// Values above the 256-bit digest width are unsatisfiable. This is shared by
 /// protocols such as go-away and haphash whose verifier difficulty spans the
 /// complete digest rather than only the first comparison word.
-#[must_use]
+#[must_use = "the returned prefix validation decision must be checked"]
 pub fn hash_has_leading_zero_bits(hash: &[u32; 8], bits: u64) -> bool {
     if bits > 256 {
         return false;
@@ -392,7 +392,7 @@ pub fn hash_has_leading_zero_bits(hash: &[u32; 8], bits: u64) -> bool {
 }
 
 /// Compute the mask for a `GoAway` `PoW` against the first 64 SHA-256 bits.
-#[must_use]
+#[must_use = "the returned mask defines the comparison constraint"]
 pub const fn compute_mask_goaway(difficulty_factor: NonZeroU8) -> u64 {
     let bits = difficulty_factor.get();
     if bits >= 64 {
@@ -403,7 +403,7 @@ pub const fn compute_mask_goaway(difficulty_factor: NonZeroU8) -> u64 {
 }
 
 /// Compute a mask for a Cerberus `PoW` (mask & (V\[0] << 32) == 0)
-#[must_use]
+#[must_use = "the returned mask defines the comparison constraint"]
 pub const fn compute_mask_cerberus(difficulty_factor: NonZeroU8) -> u64 {
     let doubled = difficulty_factor.get().saturating_mul(2);
     let bits = if doubled > 32 { 32 } else { doubled };
@@ -417,7 +417,7 @@ pub const fn compute_mask_cerberus(difficulty_factor: NonZeroU8) -> u64 {
 }
 
 /// Extract top 128 bits from a 64-bit word array
-#[must_use]
+#[must_use = "the returned integer is the extracted big-endian value"]
 pub const fn extract128_be(inp: [u32; 8]) -> u128 {
     (inp[0] as u128) << 96 | (inp[1] as u128) << 64 | (inp[2] as u128) << 32 | (inp[3] as u128)
 }

@@ -1,7 +1,7 @@
 //! Reproducible Tor onion-service v1 Equi-X CPU throughput and latency benchmark.
 //!
 //! Run from the challenge-solvers workspace:
-//! cargo +nightly-2026-11-03 run --locked --profile test -j 8
+//! cargo run --locked --profile test -j 8
 //!   -p challenge-protocols --example `tor_equix_bench` -- 512 3 3
 //!
 //! Output is JSONL: fixed-work throughput has identical *nonce inputs* for

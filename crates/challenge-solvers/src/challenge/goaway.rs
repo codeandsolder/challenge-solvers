@@ -20,19 +20,19 @@ pub struct GoAwayConfig {
 
 impl GoAwayConfig {
     /// Get the challenge of a `GoAway` "js-pow-sha256" `PoW`.
-    #[must_use]
+    #[must_use = "the returned challenge data is needed by the consumer"]
     pub fn challenge(&self) -> &str {
         &self.challenge
     }
 
     /// Get the difficulty of a `GoAway` "js-pow-sha256" `PoW`.
-    #[must_use]
+    #[must_use = "the returned difficulty defines the challenge constraint"]
     pub const fn difficulty(&self) -> u64 {
         self.difficulty
     }
 
     /// Estimate the workload of a `GoAway` "js-pow-sha256" `PoW`.
-    #[must_use]
+    #[must_use = "the returned estimate is needed for work accounting"]
     pub const fn estimated_workload(&self) -> u64 {
         if self.difficulty >= 64 {
             u64::MAX
@@ -42,7 +42,7 @@ impl GoAwayConfig {
     }
 
     /// Solve a `GoAway` "js-pow-sha256" `PoW`.
-    #[must_use]
+    #[must_use = "the returned outcome contains the solution and work accounting"]
     pub fn solve(&self) -> (Option<(u64, [u32; 8])>, u64) {
         self.solve_with_limit(u64::MAX)
     }

@@ -217,13 +217,13 @@ impl GpuSolver {
     }
 
     /// Return the selected adapter name.
-    #[must_use]
+    #[must_use = "the returned adapter name identifies the selected GPU"]
     pub fn adapter(&self) -> &str {
         &self.adapter
     }
 
     /// List available Vulkan and native GPU implementations.
-    #[must_use]
+    #[must_use = "the returned list identifies the available implementations"]
     pub fn implementations(&self) -> Vec<&'static str> {
         let mut implementations = Vec::with_capacity(3);
         if let Some(native) = self.native_backend.as_ref() {

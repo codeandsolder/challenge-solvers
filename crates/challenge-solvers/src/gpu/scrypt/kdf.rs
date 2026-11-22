@@ -27,7 +27,7 @@ pub struct ScryptKdfGpu<'a> {
 
 impl<'a> ScryptKdfGpu<'a> {
     /// Compile the complete scrypt KDF pipelines on the selected GPU.
-    #[must_use]
+    #[must_use = "the constructed backend owns the initialized GPU resources"]
     pub fn new(gpu: &'a GpuContext) -> Self {
         Self::with_romix(gpu, ScryptRomixGpu::new(gpu))
     }
@@ -37,7 +37,7 @@ impl<'a> ScryptKdfGpu<'a> {
     /// The PBKDF2 pipelines and host dispatch logic are identical to
     /// production, allowing end-to-end A/B measurements on one GPU queue.
     #[cfg(feature = "internals")]
-    #[must_use]
+    #[must_use = "the constructed backend owns the initialized GPU resources"]
     pub fn new_from_romix_wgsl(gpu: &'a GpuContext, source: &str) -> Self {
         Self::with_romix(gpu, ScryptRomixGpu::new_from_wgsl(gpu, source))
     }

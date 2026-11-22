@@ -157,7 +157,7 @@ pub fn verify(puzzle: &str, solutions: &[u8]) -> anyhow::Result<bool> {
 ///
 /// Cheap puzzles do not spawn needless threads; expensive puzzles can use
 /// idle CPU permits, capped by the number of independent solutions.
-#[must_use]
+#[must_use = "the returned worker recommendation is needed for scheduling"]
 pub fn suggested_workers(challenge: &Value, available: usize) -> Option<usize> {
     if available == 0 {
         return None;

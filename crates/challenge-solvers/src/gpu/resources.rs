@@ -333,7 +333,7 @@ impl GpuContext {
     ///
     /// Production kernels and routing remain unchanged.
     #[cfg(feature = "internals")]
-    #[must_use]
+    #[must_use = "the modified configuration is returned rather than mutating the original"]
     pub fn with_alternative_majority(&self) -> Self {
         let pipelines = GpuPipelines::create(&self.device, true);
         let buffers = GpuBuffers {

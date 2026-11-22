@@ -16,9 +16,8 @@ permissions:
 jobs:
   simd-kernels:
     name: Portable-SIMD CPU kernel tests
-    uses: codeandsolder/ci-workflows/.github/workflows/rust-sccache.yml@c6fcb5f8920460c109ee87152506c3d97889ed4e # main
+    uses: codeandsolder/ci-workflows/.github/workflows/rust-sccache.yml@ce8f8a2849c8cc0ce221e4cb283a4bef0de4a01a # main
     with:
-      rust-toolchain: "nightly-2026-11-03"
       rust-components: "rustfmt"
       timeout-minutes: 15
       command: |
@@ -27,9 +26,8 @@ jobs:
 
   protocol-solvers:
     name: Reusable protocol and Argon2 tests
-    uses: codeandsolder/ci-workflows/.github/workflows/rust-sccache.yml@c6fcb5f8920460c109ee87152506c3d97889ed4e # main
+    uses: codeandsolder/ci-workflows/.github/workflows/rust-sccache.yml@ce8f8a2849c8cc0ce221e4cb283a4bef0de4a01a # main
     with:
-      rust-toolchain: "nightly-2026-11-03"
       timeout-minutes: 15
       command: |
         # Protocol acceptance is correctness-only; the separate SIMD kernel
@@ -45,9 +43,8 @@ jobs:
 
   miri:
     name: Miri CPU memory model (Tree Borrows)
-    uses: codeandsolder/ci-workflows/.github/workflows/rust-sccache.yml@c6fcb5f8920460c109ee87152506c3d97889ed4e # main
+    uses: codeandsolder/ci-workflows/.github/workflows/rust-sccache.yml@ce8f8a2849c8cc0ce221e4cb283a4bef0de4a01a # main
     with:
-      rust-toolchain: "nightly-2026-11-03"
       rust-components: "miri rust-src"
       timeout-minutes: 15
       command: |
@@ -58,7 +55,7 @@ jobs:
 
   strict-rust:
     name: Strict Rust policy
-    uses: codeandsolder/rust-skills2/.github/workflows/strict-rust.yml@3119e52afb16c956bd072363d1f64f0fd916afbb # main
+    uses: codeandsolder/rust-skills2/.github/workflows/strict-rust.yml@bc1cca5a1fdae152b14fe4399341ba41b601837f # main
     with:
       cargo-args: "--locked --workspace --all-targets --all-features"
       ban-python-outside-ci: true

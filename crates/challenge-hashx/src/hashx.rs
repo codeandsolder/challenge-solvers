@@ -202,7 +202,7 @@ const fn prefix_mask(difficulty: u32) -> u32 {
 
 #[cfg(feature = "gpu")]
 /// Split leading-zero difficulty into two GPU digest masks.
-#[must_use]
+#[must_use = "the returned masks encode the difficulty constraint"]
 pub fn difficulty_masks(difficulty: u32) -> (u32, u32) {
     let low = prefix_mask(difficulty.min(32));
     let high = if difficulty > 32 {
@@ -343,7 +343,7 @@ pub fn verify(challenge: &Challenge, answer: &Answer) -> anyhow::Result<bool> {
 }
 
 /// Return whether a digest satisfies the requested leading-zero difficulty.
-#[must_use]
+#[must_use = "the returned prefix validation decision must be checked"]
 pub fn valid_prefix(hash: &[u8; 32], difficulty: u32) -> bool {
     if difficulty > 256 {
         return false;

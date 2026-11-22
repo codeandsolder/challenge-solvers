@@ -109,7 +109,7 @@ pub async fn solve_gpu(
 /// Estimated search effort for a valid Linear.pub SHA-1 GPU candidate.
 /// Two exact adjacent digest bytes yield 16 bits of expected work.
 #[cfg(feature = "gpu")]
-#[must_use]
+#[must_use = "the returned estimate is needed for backend selection"]
 pub fn auto_gpu_expected_work(challenge: &serde_json::Value) -> Option<u128> {
     parse_challenge(challenge.clone())
         .ok()

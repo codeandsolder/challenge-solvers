@@ -65,7 +65,7 @@ impl LinearSha1GpuSolver {
     }
 
     /// Number of GPU candidate invocations dispatched so far.
-    #[must_use]
+    #[must_use = "the returned count is needed for accurate work accounting"]
     pub const fn attempted_nonces(&self) -> u64 {
         self.attempted
     }

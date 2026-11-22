@@ -37,7 +37,7 @@ pub struct ScryptRomixTimings {
 
 impl<'a> ScryptRomixGpu<'a> {
     /// Create reusable RFC 7914 `ROMix` GPU pipelines.
-    #[must_use]
+    #[must_use = "the constructed backend owns the initialized GPU resources"]
     pub fn new(gpu: &'a GpuContext) -> Self {
         Self::compile_wgsl(gpu, include_str!("../shaders/scrypt_romix.wgsl"))
     }
@@ -48,7 +48,7 @@ impl<'a> ScryptRomixGpu<'a> {
     /// revisions to be measured interleaved on one device and queue without
     /// exposing shader substitution to production callers.
     #[cfg(feature = "internals")]
-    #[must_use]
+    #[must_use = "the constructed backend owns the initialized GPU resources"]
     pub fn new_from_wgsl(gpu: &'a GpuContext, source: &str) -> Self {
         Self::compile_wgsl(gpu, source)
     }

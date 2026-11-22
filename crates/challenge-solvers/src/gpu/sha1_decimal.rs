@@ -83,7 +83,7 @@ impl Sha1DecimalGpuSolver {
     }
 
     /// Total candidate invocations submitted.
-    #[must_use]
+    #[must_use = "the returned count is needed for accurate work accounting"]
     pub const fn attempted_nonces(&self) -> u64 {
         self.attempted
     }
