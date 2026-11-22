@@ -242,19 +242,21 @@ pub trait CpuIDToken: Default + Copy + Clone + 'static {
 
 /// A solver router that can take a solver or a fallback solver based on the CPU features
 #[derive(Debug, Copy, Clone)]
-#[expect(
-    missing_docs,
-    reason = "variant fields are internal dispatch state and not part of the public solver contract"
-)]
 #[cfg_attr(not(feature = "runtime-dispatch"), repr(transparent))]
 pub enum SolverRouter<T: CpuIDToken, M, S: Solver + From<M>, F: Solver + From<M>> {
     #[cfg(feature = "runtime-dispatch")]
+    /// The CPU-specific backend is available.
     Taken {
+        /// Selected CPU-specific solver.
         solver: S,
+        /// Carries the remaining router type parameters.
         _marker: core::marker::PhantomData<(S, F, T, M)>,
     },
+    /// The portable fallback backend is selected.
     Fallback {
+        /// Selected fallback solver.
         solver: F,
+        /// Carries the remaining router type parameters.
         _marker: core::marker::PhantomData<(S, F, T, M)>,
     },
 }

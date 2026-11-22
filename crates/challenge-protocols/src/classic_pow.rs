@@ -326,14 +326,12 @@ fn decimal_solver(
         Implementation::Avx512 => Ok(Box::new(
             challenge_solvers::solver::x86::Avx512DecimalSolver::from(message),
         )),
-        #[cfg_attr(
-            target_arch = "x86_64",
-            expect(
-                unreachable_patterns,
-                reason = "all solver implementations in this match are available on x86_64"
-            )
-        )]
-        _ => Err(invalid_request(anyhow!(
+        #[cfg(not(target_arch = "x86_64"))]
+        Implementation::Avx2 | Implementation::Avx512 => Err(invalid_request(anyhow!(
+            "implementation unavailable on this target"
+        ))),
+        #[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
+        Implementation::ShaNi => Err(invalid_request(anyhow!(
             "implementation unavailable on this target"
         ))),
     }
@@ -394,14 +392,12 @@ fn goaway_solver(
         Implementation::Avx512 => Ok(Box::new(
             challenge_solvers::solver::x86::Avx512GoAwaySolver::from(message),
         )),
-        #[cfg_attr(
-            target_arch = "x86_64",
-            expect(
-                unreachable_patterns,
-                reason = "all solver implementations in this match are available on x86_64"
-            )
-        )]
-        _ => Err(invalid_request(anyhow!(
+        #[cfg(not(target_arch = "x86_64"))]
+        Implementation::Avx2 | Implementation::Avx512 => Err(invalid_request(anyhow!(
+            "implementation unavailable on this target"
+        ))),
+        #[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
+        Implementation::ShaNi => Err(invalid_request(anyhow!(
             "implementation unavailable on this target"
         ))),
     }
