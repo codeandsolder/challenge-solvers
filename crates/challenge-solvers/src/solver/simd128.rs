@@ -326,7 +326,7 @@ impl CerberusSolver {
     }
 
     /// Get the attempted nonces.
-    #[must_use]
+    #[must_use = "the returned count is needed for accurate work accounting"]
     pub fn attempted_nonces(&self) -> u64 {
         self.attempted_nonces
     }

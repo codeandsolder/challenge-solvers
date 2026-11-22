@@ -222,7 +222,7 @@ impl AltchaSha256Solver {
 
     /// The complete independently validated answer from the last successful
     /// PBKDF2 GPU solve, rather than just the first SHA-256 output block.
-    #[must_use]
+    #[must_use = "the returned key is the verified result"]
     pub fn verified_key(&self) -> Option<&[u8]> {
         self.verified_key.as_deref()
     }
@@ -268,7 +268,7 @@ impl AltchaSha256Solver {
     }
 
     /// Number of candidates dispatched so far.
-    #[must_use]
+    #[must_use = "the returned count is needed for accurate work accounting"]
     pub const fn attempted_nonces(&self) -> u64 {
         self.attempted_nonces
     }

@@ -45,7 +45,7 @@ impl<'de> serde::Deserialize<'de> for MaybeSemver {
 
 impl ChallengeDescriptor {
     /// Build a pre-formatted message for the challenge.
-    #[must_use]
+    #[must_use = "the returned prepared message is needed for computation"]
     pub fn build_msg(&self, working_set: u32) -> Option<CerberusMessage> {
         let buf = format!(
             "{}|{}|{}|{}|",
@@ -69,49 +69,49 @@ impl ChallengeDescriptor {
     }
 
     /// Return the challenge difficulty in Cerberus dubits (two bits each).
-    #[must_use]
+    #[must_use = "the returned difficulty defines the challenge constraint"]
     pub const fn difficulty(&self) -> core::num::NonZeroU8 {
         self.difficulty
     }
 
     /// Return the estimated workload.
-    #[must_use]
+    #[must_use = "the returned estimate is needed for work accounting"]
     pub fn estimated_workload(&self) -> u64 {
         4u64.saturating_pow(self.difficulty.get().into())
     }
 
     /// Return the mask.
-    #[must_use]
+    #[must_use = "the returned mask defines the comparison constraint"]
     pub const fn mask(&self) -> u64 {
         compute_mask_cerberus(self.difficulty)
     }
 
     /// Get the nonce of a Cerberus `PoW`.
-    #[must_use]
+    #[must_use = "the returned nonce is part of the challenge data"]
     pub const fn nonce(&self) -> u64 {
         self.nonce
     }
 
     /// Get the timestamp of a Cerberus `PoW`.
-    #[must_use]
+    #[must_use = "the returned timestamp is part of the challenge data"]
     pub const fn ts(&self) -> u64 {
         self.ts
     }
 
     /// Get the signature of a Cerberus `PoW`.
-    #[must_use]
+    #[must_use = "the returned signature is part of the challenge data"]
     pub fn signature(&self) -> &str {
         &self.signature
     }
 
     /// Solve a Cerberus `PoW`.
-    #[must_use]
+    #[must_use = "the returned outcome contains the solution and work accounting"]
     pub fn solve(&self) -> (Option<(u64, [u32; 8])>, u64) {
         self.solve_with_limit(u64::MAX)
     }
 
     /// Solve a Cerberus `PoW` with a limit.
-    #[must_use]
+    #[must_use = "the returned outcome contains the solution and work accounting"]
     pub fn solve_with_limit(&self, limit: u64) -> (Option<(u64, [u32; 8])>, u64) {
         let mask = compute_mask_cerberus(self.difficulty);
 

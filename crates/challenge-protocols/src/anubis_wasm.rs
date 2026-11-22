@@ -124,7 +124,7 @@ fn argon2id_hash(data: &[u8], nonce: u32) -> anyhow::Result<[u8; 32]> {
 }
 
 /// Validate a WASM Anubis SHA-256 proof, including protocol nonce byte order.
-#[must_use]
+#[must_use = "the returned verification decision must be checked"]
 pub fn verify_sha256(challenge: &Challenge, answer: &Answer) -> bool {
     if challenge.validate().is_err() {
         return false;
@@ -140,7 +140,7 @@ pub fn verify_sha256(challenge: &Challenge, answer: &Answer) -> bool {
 }
 
 /// Validate a WASM Anubis Argon2id proof against the protocol digest.
-#[must_use]
+#[must_use = "the returned verification decision must be checked"]
 pub fn verify_argon2id(challenge: &Challenge, answer: &Answer) -> bool {
     if challenge.validate().is_err() {
         return false;

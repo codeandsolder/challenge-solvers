@@ -171,7 +171,7 @@ impl AltchaSha64GpuSolver {
     }
 
     /// Number of candidates dispatched through this solver.
-    #[must_use]
+    #[must_use = "the returned count is needed for accurate work accounting"]
     pub const fn attempted_nonces(&self) -> u64 {
         self.attempted
     }

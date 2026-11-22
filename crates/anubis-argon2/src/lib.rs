@@ -71,7 +71,7 @@ pub struct Memory {
 }
 
 impl Memory {
-    #[must_use]
+    #[must_use = "the returned workspace owns the reusable memory allocation"]
     pub fn new() -> Self {
         Self {
             blocks: vec![Block::ZERO; MEMORY_KIB],
@@ -91,7 +91,7 @@ impl Default for Memory {
 ///
 /// Returns `None` only if an internal reference index would alias the output
 /// block, which is forbidden by the Argon2 addressing rules.
-#[must_use]
+#[must_use = "the returned digest indicates whether the hash computation succeeded"]
 pub fn hash(password: &[u8], salt: [u8; 8], memory: &mut Memory) -> Option<[u8; 32]> {
     let password_len = u32::try_from(password.len()).ok()?;
     let h0 = initial_hash(password, password_len, salt);

@@ -35,7 +35,7 @@ impl SingleBlockSolver {
     ///
     /// GPU workgroups cooperatively stop after a hit, so this is an upper bound on candidates
     /// actually executed by the device.
-    #[must_use]
+    #[must_use = "the returned count is needed for accurate work accounting"]
     pub const fn attempted_nonces(&self) -> u64 {
         self.attempted_nonces
     }
@@ -102,7 +102,7 @@ impl DoubleBlockSolver {
         self.limit = limit;
     }
     /// Number of candidates dispatched so far.
-    #[must_use]
+    #[must_use = "the returned count is needed for accurate work accounting"]
     pub const fn attempted_nonces(&self) -> u64 {
         self.attempted_nonces
     }
@@ -219,7 +219,7 @@ impl DecimalSolver {
         }
     }
     /// Number of candidates dispatched so far.
-    #[must_use]
+    #[must_use = "the returned count is needed for accurate work accounting"]
     pub const fn attempted_nonces(&self) -> u64 {
         match self {
             Self::SingleBlock(s) => s.attempted_nonces(),
@@ -267,7 +267,7 @@ impl GoAwaySolver {
         self.limit = limit;
     }
     /// Number of candidates dispatched so far.
-    #[must_use]
+    #[must_use = "the returned count is needed for accurate work accounting"]
     pub const fn attempted_nonces(&self) -> u64 {
         self.attempted_nonces
     }
@@ -363,7 +363,7 @@ impl BinarySolver {
         self.limit = limit;
     }
     /// Number of candidates dispatched so far.
-    #[must_use]
+    #[must_use = "the returned count is needed for accurate work accounting"]
     pub const fn attempted_nonces(&self) -> u64 {
         self.attempted_nonces
     }
@@ -464,7 +464,7 @@ impl CerberusSolver {
     }
 
     /// Number of candidates dispatched so far.
-    #[must_use]
+    #[must_use = "the returned count is needed for accurate work accounting"]
     pub const fn attempted_nonces(&self) -> u64 {
         self.attempted_nonces
     }

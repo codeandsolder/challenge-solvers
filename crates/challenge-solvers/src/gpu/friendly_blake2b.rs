@@ -91,7 +91,7 @@ impl<'a> FriendlyBlake2bGpu<'a> {
     }
 
     /// Maximum candidates accepted in one GPU dispatch.
-    #[must_use]
+    #[must_use = "the returned capacity bounds the batch size"]
     pub fn batch_capacity(&self) -> u64 {
         u64::from(self.gpu.max_wgs) * u64::from(WG_SIZE)
     }

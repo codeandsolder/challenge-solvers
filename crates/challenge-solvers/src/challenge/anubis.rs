@@ -29,7 +29,7 @@ pub enum ChallengeForm {
 
 impl ChallengeForm {
     /// Get the id of an Anubis `PoW` challenge.
-    #[must_use]
+    #[must_use = "the returned identifier associates the challenge with its session"]
     pub fn id(&self) -> Option<&str> {
         match self {
             Self::Plain(_) => None,
@@ -50,7 +50,7 @@ impl AsRef<str> for ChallengeForm {
 
 impl ChallengeDescriptor {
     /// Estimate the workload of an Anubis `PoW`.
-    #[must_use]
+    #[must_use = "the returned estimate is needed for work accounting"]
     pub fn estimated_workload(&self) -> u64 {
         if self.rules.algorithm == "preact" {
             return 1u64;
@@ -59,13 +59,13 @@ impl ChallengeDescriptor {
     }
 
     /// Get the rules of an Anubis `PoW`.
-    #[must_use]
+    #[must_use = "the returned rules describe the challenge constraints"]
     pub const fn rules(&self) -> &AnubisRules {
         &self.rules
     }
 
     /// Get the hash result key of an Anubis `PoW`.
-    #[must_use]
+    #[must_use = "the returned key identifies the hash result field"]
     pub fn hash_result_key(&self) -> &str {
         if self.rules.algorithm == "preact" {
             "result"
@@ -75,13 +75,13 @@ impl ChallengeDescriptor {
     }
 
     /// Get the challenge of an Anubis `PoW`.
-    #[must_use]
+    #[must_use = "the returned challenge data is needed by the consumer"]
     pub const fn challenge(&self) -> &ChallengeForm {
         &self.challenge
     }
 
     /// If the Anubis `PoW` is supported.
-    #[must_use]
+    #[must_use = "the returned support decision must be checked before selecting the backend"]
     pub fn supported(&self) -> bool {
         self.rules.algorithm == "fast"
             || self.rules.algorithm == "slow"
@@ -89,13 +89,13 @@ impl ChallengeDescriptor {
     }
 
     /// Solve an Anubis `PoW`.
-    #[must_use]
+    #[must_use = "the returned outcome contains the solution and work accounting"]
     pub fn solve(&self) -> (Option<(u64, [u32; 8])>, u64) {
         self.solve_with_limit(u64::MAX)
     }
 
     /// Delay to hold the solution before it will be accepted.
-    #[must_use]
+    #[must_use = "the returned delay is needed for scheduling"]
     pub fn delay(&self) -> u64 {
         if self.rules.algorithm == "preact" {
             u64::from(self.rules.difficulty) * 100
@@ -105,7 +105,7 @@ impl ChallengeDescriptor {
     }
 
     /// Solve an Anubis `PoW` with a limit.
-    #[must_use]
+    #[must_use = "the returned outcome contains the solution and work accounting"]
     pub fn solve_with_limit(&self, limit: u64) -> (Option<(u64, [u32; 8])>, u64) {
         if self.rules.algorithm == "preact" {
             let hash: [u8; 32] = sha2::Sha256::digest(self.challenge.as_ref().as_bytes()).into();
@@ -139,19 +139,19 @@ pub struct AnubisRules {
 
 impl AnubisRules {
     /// If the instant is instantly or almost instantly solved and not worth task spawning.
-    #[must_use]
+    #[must_use = "the returned flag determines whether a delay applies"]
     pub fn instant(&self) -> bool {
         self.algorithm == "preact" || self.difficulty < 4
     }
 
     /// Get the algorithm of an Anubis `PoW`.
-    #[must_use]
+    #[must_use = "the returned identifier selects the algorithm"]
     pub fn algorithm(&self) -> &str {
         &self.algorithm
     }
 
     /// Difficulty in leading zero nibbles.
-    #[must_use]
+    #[must_use = "the returned difficulty defines the challenge constraint"]
     pub const fn difficulty(&self) -> u8 {
         self.difficulty
     }

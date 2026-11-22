@@ -52,7 +52,7 @@ impl ChallengeRules {
     ///
     /// Difficulties above 16 nibbles cannot be represented by the 64-bit
     /// comparison used by Cap.js and are therefore unsupported.
-    #[must_use]
+    #[must_use = "the returned mask defines the comparison constraint"]
     pub fn mask(self) -> Option<u64> {
         capjs_mask(self.difficulty)
     }
@@ -93,19 +93,19 @@ pub struct SolveCapJsResponse {
 
 impl ChallengeDescriptor {
     /// Get the rules of a Cap.js `PoW`.
-    #[must_use]
+    #[must_use = "the returned rules describe the challenge constraints"]
     pub const fn rules(&self) -> &ChallengeRules {
         &self.rules
     }
 
     /// Solve a Cap.js `PoW`.
-    #[must_use]
+    #[must_use = "the returned outcome contains the solution and work accounting"]
     pub fn solve(self) -> (Option<SolveCapJsResponse>, u64) {
         self.solve_with_limit(u64::MAX)
     }
 
     /// Estimate the workload of a Cap.js `PoW`.
-    #[must_use]
+    #[must_use = "the returned estimate is needed for work accounting"]
     pub fn estimated_workload(&self) -> u64 {
         16u64
             .saturating_pow(u32::from(self.rules.difficulty))
@@ -114,7 +114,7 @@ impl ChallengeDescriptor {
 
     /// Solve a Cap.js `PoW` with a limit in parallel.
     #[cfg(feature = "rayon")]
-    #[must_use]
+    #[must_use = "the returned outcome contains the solution and work accounting"]
     pub fn solve_with_limit_parallel(
         self,
         pool: &rayon::ThreadPool,
@@ -193,7 +193,7 @@ impl ChallengeDescriptor {
     }
 
     /// Solve a Cap.js `PoW` with a limit.
-    #[must_use]
+    #[must_use = "the returned outcome contains the solution and work accounting"]
     pub fn solve_with_limit(self, limit: u64) -> (Option<SolveCapJsResponse>, u64) {
         let Some(mask) = self.rules.mask() else {
             return (None, 0);

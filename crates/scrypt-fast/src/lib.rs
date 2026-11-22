@@ -22,7 +22,7 @@ pub struct Workspace {
 
 impl Workspace {
     /// Allocate workspace from Scrypt parameters already validated by `RustCrypto`.
-    #[must_use]
+    #[must_use = "the returned workspace owns the reusable memory allocation"]
     pub fn new(params: &scrypt::Params) -> Self {
         let n = 1_usize << params.log_n();
         let r = params.r() as usize;
@@ -58,7 +58,7 @@ impl Workspace {
         Ok(())
     }
     /// Heap bytes reserved for the workspace, excluding the caller-owned output.
-    #[must_use]
+    #[must_use = "the returned byte count is needed for memory budgeting"]
     pub const fn footprint(&self) -> usize {
         self.b.len() + self.v.len() * 4 + self.x.len() * 4 + self.y.len() * 4
     }

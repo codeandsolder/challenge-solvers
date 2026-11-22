@@ -52,7 +52,7 @@ pub struct IEEE754LosslessFixupPrefix {
 impl IEEE754LosslessFixupPrefix {
     /// fixes up a nonce before sending it to the server
     #[inline(always)]
-    #[must_use]
+    #[must_use = "the corrected value is returned rather than mutating caller state"]
     #[expect(
         clippy::cast_precision_loss,
         reason = "the fixup deliberately maps a u64 nonce into an IEEE-754 decimal representation"
@@ -77,7 +77,7 @@ impl AsRef<[u8]> for IEEE754LosslessFixupPrefix {
 
 impl SingleBlockMessage {
     /// creates a new single block message
-    #[must_use]
+    #[must_use = "the returned prepared single-block message indicates whether the input fits"]
     #[expect(
         clippy::too_many_lines,
         reason = "the optimized single-block constructor is a linear padding/search-layout state machine; splitting it would duplicate mutable construction state"
@@ -242,7 +242,7 @@ impl SingleBlockMessage {
     /// Create a new single block message using only IEEE 754 double precision floats that can stringify losslessly
     ///
     /// The caller is expected to append the bytes from the prefix to the nonce before sending it to the server.
-    #[must_use]
+    #[must_use = "the returned prepared message and optional fixup are needed for computation"]
     #[expect(
         clippy::too_many_lines,
         reason = "the IEEE-754 constructor is a linear padding/search-layout state machine with shared mutable construction state"
@@ -493,7 +493,7 @@ impl DoubleBlockMessage {
     pub const DIGIT_IDX: usize = 54;
 
     /// creates a new double block message
-    #[must_use]
+    #[must_use = "the returned prepared multi-block message indicates whether the input fits"]
     pub fn new(mut prefix: &[u8], mut working_set: u32) -> Option<Self> {
         // construct the message buffer
         let mut prefix_state = sha256::IV;
@@ -607,7 +607,7 @@ impl DecimalMessage {
     }
 
     /// creates a new decimal message using only IEEE 754 double precision floats that can stringify losslessly
-    #[must_use]
+    #[must_use = "the returned prepared message and optional fixup are needed for computation"]
     pub fn new_f64(
         input: &[u8],
         working_set: u32,
@@ -644,7 +644,7 @@ impl BinaryMessage {
     /// Creates a new binary message.
     ///
     /// Returns `None` when the nonce width exceeds the eight bytes representable by the solver layout.
-    #[must_use]
+    #[must_use = "the returned prepared message indicates whether the nonce width is supported"]
     pub fn new(salt: &[u8], nonce_byte_count: NonZeroU8) -> Option<Self> {
         if nonce_byte_count.get() > 8 {
             return None;
@@ -697,7 +697,7 @@ pub struct CerberusBinaryMessage {
 
 impl CerberusBinaryMessage {
     /// Create a new Cerberus message
-    #[must_use]
+    #[must_use = "the returned prepared message contains the prehashed input"]
     pub fn new(salt: &[u8], first_word: u32) -> Self {
         let prehash = ::blake3::hash(salt).to_hex();
         let mut prehash_bytes = [0_u8; 64];
@@ -706,7 +706,7 @@ impl CerberusBinaryMessage {
     }
 
     /// Create a new Cerberus message with a prehashed midstate
-    #[must_use]
+    #[must_use = "the returned prepared message is needed for computation"]
     pub fn new_prehashed(prehash: &[u8; 64], first_word: u32) -> Self {
         let mut block = [0; 16];
         for i in 0..16 {
@@ -748,7 +748,7 @@ impl CerberusDecimalMessage {
     /// Create a new Cerberus message
     ///
     /// End-to-end salt construction: `${challenge}|${inputNonce}|${ts}|${signature}|`
-    #[must_use]
+    #[must_use = "the returned prepared message indicates whether the input fits"]
     pub fn new(salt: &[u8], mut working_set: u32) -> Option<Self> {
         // nonce placement in blake3 is less important than sha256, both early and late salts have strategies to elide computation.
         //
@@ -871,7 +871,7 @@ pub struct GoAwayMessage {
 
 impl GoAwayMessage {
     /// creates a new go-away message
-    #[must_use]
+    #[must_use = "the returned prepared message contains the challenge state"]
     pub const fn new(challenge: [u32; 8], high_word: u32) -> Self {
         Self {
             challenge,
@@ -885,7 +885,7 @@ impl GoAwayMessage {
     }
 
     /// creates a new go-away message from a 32 byte challenge
-    #[must_use]
+    #[must_use = "the returned prepared message is needed for computation"]
     pub fn new_bytes(challenge: &[u8; 32], high_word: u32) -> Self {
         Self {
             challenge: core::array::from_fn(|i| {
@@ -901,7 +901,7 @@ impl GoAwayMessage {
     }
 
     /// creates a new go-away message from a 64 byte challenge
-    #[must_use]
+    #[must_use = "the returned prepared message indicates whether the input was valid"]
     pub fn new_hex(challenge: &[u8; 64], high_word: u32) -> Option<Self> {
         let mut prefix_fixed_up = [0; 32];
         for i in 0..32 {
@@ -952,7 +952,7 @@ const fn capjs_lfsr(state: u32) -> u32 {
 
 impl CapJSEmitter {
     /// Create a new emitter for a given challenge token
-    #[must_use]
+    #[must_use = "the returned prepared message contains the token-derived state"]
     pub const fn new(token: &[u8]) -> Self {
         let mut i = 0;
         let mut hash = 2_166_136_261;

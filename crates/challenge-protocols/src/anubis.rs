@@ -35,14 +35,14 @@ impl Challenge {
 
     #[cfg(feature = "gpu")]
     /// Expected search attempts for this challenge, saturating on overflow.
-    #[must_use]
+    #[must_use = "the returned estimate is needed for work accounting"]
     pub fn expected_work(&self) -> u64 {
         16_u64.saturating_pow(u32::from(self.difficulty))
     }
 
     #[cfg(feature = "gpu")]
     /// Whether the challenge length is aligned for the GPU backend.
-    #[must_use]
+    #[must_use = "the returned compatibility decision determines backend selection"]
     pub const fn gpu_compatible(&self) -> bool {
         self.data.len().is_multiple_of(64)
     }
@@ -75,7 +75,7 @@ fn hash_hex(words: [u32; 8]) -> String {
 }
 
 /// Check the Anubis SHA-256 proof against the challenge and difficulty.
-#[must_use]
+#[must_use = "the returned verification decision must be checked"]
 pub fn verify(challenge: &Challenge, answer: &Answer) -> bool {
     if challenge.validate().is_err() {
         return false;

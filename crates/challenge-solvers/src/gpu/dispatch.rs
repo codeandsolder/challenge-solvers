@@ -149,25 +149,25 @@ impl GpuContext {
     ///
     /// Other independent solver pipelines can use the same logical device,
     /// retaining their own buffers while avoiding a second device request.
-    #[must_use]
+    #[must_use = "the returned device handle is needed for GPU resource creation"]
     pub const fn device(&self) -> &wgpu::Device {
         &self.device
     }
 
     /// Borrow the queue associated with this GPU device.
-    #[must_use]
+    #[must_use = "the returned queue handle is needed for GPU submission"]
     pub const fn queue(&self) -> &wgpu::Queue {
         &self.queue
     }
 
     /// Maximum workgroups per dispatch dimension supported by the adapter.
-    #[must_use]
+    #[must_use = "the returned limit bounds dispatch dimensions"]
     pub const fn max_workgroups_per_dimension(&self) -> u32 {
         self.max_wgs
     }
 
     /// Human-readable adapter/backend description.
-    #[must_use]
+    #[must_use = "the returned adapter name identifies the selected GPU"]
     pub fn adapter(&self) -> &str {
         &self.adapter
     }
@@ -177,7 +177,7 @@ impl GpuContext {
     /// This is the negotiated device feature set, not an adapter-wide claim:
     /// callers must check it before selecting kernels that require additional
     /// features such as native 64-bit shader integers.
-    #[must_use]
+    #[must_use = "the returned feature set describes the selected device capabilities"]
     pub fn features(&self) -> wgpu::Features {
         self.device.features()
     }

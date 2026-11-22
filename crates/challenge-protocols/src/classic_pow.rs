@@ -82,7 +82,7 @@ pub fn preflight_capjs_format_two(challenge: &Value) -> anyhow::Result<()> {
 ///
 /// None means not memory-hard. Some(Err) means the challenge has invalid or
 /// unaccountable KDF parameters. Both cases matter to the HTTP scheduler.
-#[must_use]
+#[must_use = "the returned estimate is needed to budget memory"]
 pub fn memory_hard_requirement(kind: &str, challenge: &Value) -> Option<anyhow::Result<u64>> {
     match kind {
         "altcha" => altcha::memory_requirement(challenge),
@@ -218,7 +218,7 @@ pub fn solve(
 /// This shares the protocol's real parser and GPU eligibility logic so the
 /// service does not maintain a duplicate, incomplete list of supported cases.
 #[cfg(feature = "gpu")]
-#[must_use]
+#[must_use = "the returned estimate is needed for backend selection"]
 pub fn auto_gpu_expected_work(kind: &str, challenge: &Value) -> Option<u128> {
     match kind {
         "altcha" => altcha::auto_gpu_expected_work(challenge),
