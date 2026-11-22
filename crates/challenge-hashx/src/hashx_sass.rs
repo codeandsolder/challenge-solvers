@@ -4,14 +4,48 @@
 use crate::hashx::{GpuOp, GpuProgram, Instr};
 use anyhow::Context;
 
-const TEXT_OFFSET: usize = 0x380;
-const TEXT_SIZE: usize = 0x20000;
-const TEXT_WORDS: usize = TEXT_SIZE / 16;
+const SM75_TEXT_OFFSET: usize = 0x380;
+const SM75_TEXT_SIZE: usize = 0x20_000;
+const SM75_TEXT_WORDS: usize = SM75_TEXT_SIZE / 16;
+const SM86_TEXT_OFFSET: usize = 0x700;
+const SM86_TEXT_SIZE: usize = 0x20_500;
+const SM86_EXIT_OFFSET: usize = 0x4e4;
 // HashX generation has a fixed 512-instruction schedule: 160 Mul, 32 wide-mul,
 // 16 Target/Branch pairs, and 288 normal ops. Even pessimistically expanding every
 // wide-mul as signed, every normal op to its longest form, and all 16 one-shot replay
 // regions, generated code stays far below this 8192-word shell. Dead words follow EXIT.
-const TEMPLATE: &[u8] = include_bytes!("hashx_sm75_solve_template.cubin");
+const SM75_TEMPLATE: &[u8] = include_bytes!("hashx_sm75_solve_template.cubin");
+const SM86_TEMPLATE: &[u8] = include_bytes!("hashx_sm86_solve_template.cubin");
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SassTarget {
+    Sm75,
+    Sm86,
+}
+
+impl SassTarget {
+    pub(crate) const fn from_capability(capability: (i32, i32)) -> Option<Self> {
+        match capability {
+            (7, 5) => Some(Self::Sm75),
+            (8, 6) => Some(Self::Sm86),
+            _ => None,
+        }
+    }
+
+    pub(crate) const fn implementation(self) -> &'static str {
+        match self {
+            Self::Sm75 => "cuda-sm75-sass",
+            Self::Sm86 => "cuda-sm86-sass",
+        }
+    }
+
+    const fn template(self) -> &'static [u8] {
+        match self {
+            Self::Sm75 => SM75_TEMPLATE,
+            Self::Sm86 => SM86_TEMPLATE,
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Pred {
@@ -333,13 +367,21 @@ fn s2r(rd: Reg, sr: SpecialReg, write_barrier: u8) -> u128 {
     code
 }
 
-fn red_min_u32_gpu_strong(addr: Reg, src: Reg, guard: Pred, stall: u8) -> u128 {
+fn red_min_u32_gpu_strong(target: SassTarget, addr: Reg, src: Reg, guard: Pred, stall: u8) -> u128 {
     let mut code = base(0x98e, guard, Ctrl::standard(stall));
-    code |= 1u128 << 8;
-    code |= 1u128 << 23;
-    code |= 2u128 << 15;
-    code |= 2u128 << 13;
-    code |= 1u128 << 20;
+    match target {
+        SassTarget::Sm75 => {
+            code |= 1u128 << 8;
+            code |= 1u128 << 23;
+            code |= 2u128 << 15;
+            code |= 2u128 << 13;
+            code |= 1u128 << 20;
+        }
+        // SM86 ptxas 13.1 encodes GPU-scope RED with a uniform address
+        // descriptor (UR4:UR5, loaded from c[0][0x118]). Copy the compiler
+        // flags, not the old SM75 flags which decode as system scope on SM86.
+        SassTarget::Sm86 => code |= 0x0c90_e184,
+    }
     code |= u128::from(addr.bits()) << 88;
     code |= u128::from(src.bits()) << 96;
     code
@@ -392,7 +434,7 @@ struct Emitter {
 impl Emitter {
     fn new() -> Self {
         Self {
-            words: Vec::with_capacity(TEXT_WORDS),
+            words: Vec::with_capacity(SM75_TEXT_WORDS / 2),
         }
     }
     fn emit(&mut self, word: u128) {
@@ -925,7 +967,11 @@ const fn split_u64(value: u64) -> (u32, u32) {
     clippy::too_many_lines,
     reason = "the generated SASS instruction stream is intentionally linear for instruction-order auditability"
 )]
-fn generate(source: &GpuProgram) -> anyhow::Result<Vec<u128>> {
+fn generate(source: &GpuProgram, target: SassTarget, block_size: u32) -> anyhow::Result<Vec<u128>> {
+    anyhow::ensure!(
+        (32..=1024).contains(&block_size) && block_size.is_power_of_two(),
+        "invalid SASS block size"
+    );
     let key = source.key();
     let program = source.instructions();
     let mut e = Emitter::new();
@@ -982,7 +1028,7 @@ fn generate(source: &GpuProgram) -> anyhow::Result<Vec<u128>> {
         r(3),
         None,
         r(5),
-        Src1::Imm(32),
+        Src1::Imm(block_size),
         r(3),
         None,
         Pred::PT,
@@ -1046,12 +1092,12 @@ fn generate(source: &GpuProgram) -> anyhow::Result<Vec<u128>> {
         6,
     ));
     e.mov(4, Src1::Reg(Reg::Z), Pred::PT);
-    let mut target: Option<usize> = None;
+    let mut branch_target: Option<usize> = None;
     for (index, ins) in program.iter().enumerate() {
         match ins.kind()? {
-            GpuOp::Target => target = Some(index),
+            GpuOp::Target => branch_target = Some(index),
             GpuOp::Branch => {
-                let target = target.context("HashX branch without target")?;
+                let target = branch_target.context("HashX branch without target")?;
                 e.lop(5, 4, Src1::Imm(ins.imm), 0xc0, Pred::PT);
                 e.emit(isetp(
                     Cmp::Eq,
@@ -1111,46 +1157,62 @@ fn generate(source: &GpuProgram) -> anyhow::Result<Vec<u128>> {
     for _ in 0..6 {
         e.emit(nop(1));
     }
-    e.emit(red_min_u32_gpu_strong(r(0), r(2), Pred::P3, 8));
+    if target == SassTarget::Sm86 {
+        // ULDC.64 UR4, c[0x0][0x118], compiler-derived Ampere encoding.
+        e.emit(0x0000_4600_0004_7ab9_000f_d200_0000_0a00);
+    }
+    e.emit(red_min_u32_gpu_strong(target, r(0), r(2), Pred::P3, 8));
     e.emit(exit(2));
-    let natural_len = e.words.len();
     anyhow::ensure!(
-        natural_len < TEXT_WORDS - 5,
-        "sm_75 HashX kernel too large: {natural_len} words"
+        e.words.len() < SM75_TEXT_WORDS - 5,
+        "HashX SASS kernel too large: {} words",
+        e.words.len()
     );
-    while e.words.len() < TEXT_WORDS - 5 {
-        e.emit(nop(1));
-    }
-    e.emit(tail_bra());
-    while e.words.len() < TEXT_WORDS {
-        e.emit(tail_nop());
-    }
-    anyhow::ensure!(e.words.len() == TEXT_WORDS, "sm_75 text size mismatch");
     Ok(e.words)
 }
 
-fn patch_words(cubin: &mut [u8], words: &[u128]) {
-    let text = &mut cubin[TEXT_OFFSET..TEXT_OFFSET + TEXT_SIZE];
-    for (i, &word) in words.iter().enumerate() {
-        let slot = &mut text[i * 16..(i + 1) * 16];
+fn patch_words(text: &mut [u8], words: &[u128]) {
+    for (slot, &word) in text.as_chunks_mut::<16>().0.iter_mut().zip(words) {
         let bytes = word.to_le_bytes();
         slot[..8].copy_from_slice(&bytes[8..]);
         slot[8..].copy_from_slice(&bytes[..8]);
     }
 }
 
-pub fn template_solve_cubin() -> Vec<u8> {
-    TEMPLATE.to_vec()
+pub fn template_solve_cubin(target: SassTarget) -> Vec<u8> {
+    target.template().to_vec()
 }
 
-pub fn build_solve_cubin(program: &GpuProgram) -> anyhow::Result<Vec<u8>> {
-    anyhow::ensure!(
-        TEMPLATE.len() >= TEXT_OFFSET + TEXT_SIZE,
-        "embedded sm_75 cubin template is truncated"
-    );
-    let words = generate(program)?;
-    let mut cubin = TEMPLATE.to_vec();
-    patch_words(&mut cubin, &words);
+pub fn build_solve_cubin(
+    program: &GpuProgram,
+    target: SassTarget,
+    block_size: u32,
+) -> anyhow::Result<Vec<u8>> {
+    let mut words = generate(program, target, block_size)?;
+    let mut cubin = template_solve_cubin(target);
+    match target {
+        SassTarget::Sm75 => {
+            // Keep the original Turing layout and byte-for-byte reference output.
+            words.resize(SM75_TEXT_WORDS - 5, nop(1));
+            words.push(tail_bra());
+            words.resize(SM75_TEXT_WORDS, tail_nop());
+            patch_words(
+                &mut cubin[SM75_TEXT_OFFSET..SM75_TEXT_OFFSET + SM75_TEXT_SIZE],
+                &words,
+            );
+        }
+        SassTarget::Sm86 => {
+            // The independently assembled Ampere shell is prefilled with dead NOPs.
+            // Patch only the live prefix, and update EIATTR_EXIT_INSTR_OFFSETS.
+            let exit_offset = u32::try_from((words.len() - 1) * 16)?;
+            patch_words(
+                &mut cubin[SM86_TEXT_OFFSET..SM86_TEXT_OFFSET + SM86_TEXT_SIZE],
+                &words,
+            );
+            cubin[SM86_EXIT_OFFSET..SM86_EXIT_OFFSET + 4]
+                .copy_from_slice(&exit_offset.to_le_bytes());
+        }
+    }
     Ok(cubin)
 }
 
@@ -1173,14 +1235,11 @@ mod tests {
         let exit_word = exit(2);
         let mut max_words = 0_usize;
         let mut max_seed = 0_u32;
-        let cases = std::env::var("HASHX_SM75_FIT_CASES")
-            .ok()
-            .and_then(|value| value.parse::<u32>().ok())
-            .unwrap_or(1024);
+        let cases = 1024;
         for seed in 0_u32..cases {
             let seed_bytes = seed.to_le_bytes();
             let (_, program) = crate::hashx::describe(&seed_bytes)?;
-            let words = generate(&program)?;
+            let words = generate(&program, SassTarget::Sm75, 32)?;
             let used = words
                 .iter()
                 .position(|&word| word == exit_word)
@@ -1192,7 +1251,39 @@ mod tests {
             }
         }
         eprintln!("max generated sm_75 words={max_words} seed={max_seed}");
-        assert!(max_words < TEXT_WORDS - 5);
+        assert!(max_words < SM75_TEXT_WORDS - 5);
+        Ok(())
+    }
+
+    #[test]
+    fn ampere_template_and_live_exit_metadata_match() -> anyhow::Result<()> {
+        let (_, program) = crate::hashx::describe(&[0, 1, 2, 3])?;
+        assert_eq!(
+            &SM86_TEMPLATE[SM86_EXIT_OFFSET - 4..SM86_EXIT_OFFSET],
+            &[4, 0x1c, 4, 0]
+        );
+        assert_eq!(
+            &SM86_TEMPLATE[SM86_EXIT_OFFSET..SM86_EXIT_OFFSET + 4],
+            &[0; 4]
+        );
+        let code = generate(&program, SassTarget::Sm86, 32)?;
+        let cubin = build_solve_cubin(&program, SassTarget::Sm86, 32)?;
+        let metadata_exit =
+            u32::from_le_bytes(cubin[SM86_EXIT_OFFSET..SM86_EXIT_OFFSET + 4].try_into()?);
+        assert_eq!(usize::try_from(metadata_exit)?, (code.len() - 1) * 16);
+        assert_eq!(
+            code[code.len() - 3],
+            0x0000_4600_0004_7ab9_000f_d200_0000_0a00
+        );
+        assert_eq!(
+            code[code.len() - 2],
+            0x0000_0002_0000_398e_000f_f000_0c90_e184
+        );
+        assert_eq!(code[code.len() - 1], exit(2));
+        assert_eq!(
+            &cubin[SM86_TEXT_OFFSET + code.len() * 16..],
+            &SM86_TEMPLATE[SM86_TEXT_OFFSET + code.len() * 16..]
+        );
         Ok(())
     }
 
@@ -1220,7 +1311,7 @@ mod tests {
         ];
         for (seed, expected) in cases {
             let (_, program) = crate::hashx::describe(seed)?;
-            let cubin = build_solve_cubin(&program)?;
+            let cubin = build_solve_cubin(&program, SassTarget::Sm75, 32)?;
             assert_eq!(hex::encode(Sha256::digest(cubin)), *expected);
         }
         Ok(())

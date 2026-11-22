@@ -1,0 +1,78 @@
+running 1 test
+device=NVIDIA GeForce RTX 3080 target=Sm86
+SASS seed=0 block=32 compile_us=39.800 load_us=282.600 gpu_mhs=2247.800 wall_mhs=2208.458
+SASS seed=0 block=64 compile_us=37.700 load_us=149.100 gpu_mhs=2111.885 wall_mhs=2075.746
+SASS seed=0 block=128 compile_us=40.600 load_us=180.500 gpu_mhs=2314.451 wall_mhs=2271.612
+SASS seed=0 block=256 compile_us=38.200 load_us=213.200 gpu_mhs=2304.036 wall_mhs=2263.399
+SASS seed=0 block=512 compile_us=31.400 load_us=162.600 gpu_mhs=2223.368 wall_mhs=2192.584
+SOLVE seed=0 nonce=78777 elapsed_us=700.000
+SASS seed=1 block=32 compile_us=40.400 load_us=346.900 gpu_mhs=2186.574 wall_mhs=2141.781
+SASS seed=1 block=64 compile_us=36.800 load_us=253.400 gpu_mhs=2353.347 wall_mhs=2302.317
+SASS seed=1 block=128 compile_us=34.000 load_us=158.000 gpu_mhs=2274.292 wall_mhs=2236.157
+SASS seed=1 block=256 compile_us=34.000 load_us=173.400 gpu_mhs=2345.598 wall_mhs=2283.764
+SASS seed=1 block=512 compile_us=25.900 load_us=131.400 gpu_mhs=2361.147 wall_mhs=2316.367
+SOLVE seed=1 nonce=336155 elapsed_us=1443.700
+SASS seed=2 block=32 compile_us=30.600 load_us=290.300 gpu_mhs=2246.538 wall_mhs=2206.048
+SASS seed=2 block=64 compile_us=26.100 load_us=136.200 gpu_mhs=2244.384 wall_mhs=2205.178
+SASS seed=2 block=128 compile_us=33.000 load_us=184.400 gpu_mhs=2293.403 wall_mhs=2270.351
+SASS seed=2 block=256 compile_us=36.000 load_us=178.400 gpu_mhs=2328.948 wall_mhs=2285.382
+SASS seed=2 block=512 compile_us=32.900 load_us=169.100 gpu_mhs=2265.800 wall_mhs=2202.717
+SOLVE seed=2 nonce=114870 elapsed_us=821.700
+SASS seed=3 block=32 compile_us=30.600 load_us=288.100 gpu_mhs=2268.624 wall_mhs=2229.412
+SASS seed=3 block=64 compile_us=25.900 load_us=136.000 gpu_mhs=2207.789 wall_mhs=2171.527
+SASS seed=3 block=128 compile_us=29.800 load_us=200.000 gpu_mhs=2311.512 wall_mhs=2268.602
+SASS seed=3 block=256 compile_us=34.700 load_us=191.100 gpu_mhs=2181.334 wall_mhs=2148.089
+SASS seed=3 block=512 compile_us=32.500 load_us=172.300 gpu_mhs=2321.009 wall_mhs=2269.185
+SOLVE seed=3 nonce=49044 elapsed_us=565.900
+SASS seed=4 block=32 compile_us=31.300 load_us=287.600 gpu_mhs=2340.237 wall_mhs=2292.940
+SASS seed=4 block=64 compile_us=26.500 load_us=133.400 gpu_mhs=2302.094 wall_mhs=2255.396
+SASS seed=4 block=128 compile_us=35.100 load_us=193.400 gpu_mhs=2118.164 wall_mhs=2072.361
+SASS seed=4 block=256 compile_us=33.300 load_us=160.800 gpu_mhs=2316.742 wall_mhs=2278.522
+SASS seed=4 block=512 compile_us=26.200 load_us=130.200 gpu_mhs=2310.534 wall_mhs=2271.950
+SOLVE seed=4 nonce=446420 elapsed_us=1374.600
+SASS seed=5 block=32 compile_us=29.500 load_us=262.600 gpu_mhs=2347.614 wall_mhs=2299.603
+SASS seed=5 block=64 compile_us=38.100 load_us=184.800 gpu_mhs=2173.521 wall_mhs=2134.750
+SASS seed=5 block=128 compile_us=54.400 load_us=191.800 gpu_mhs=2338.233 wall_mhs=2266.028
+SASS seed=5 block=256 compile_us=37.300 load_us=168.900 gpu_mhs=2210.479 wall_mhs=2170.319
+SASS seed=5 block=512 compile_us=26.100 load_us=194.900 gpu_mhs=2342.914 wall_mhs=2297.714
+SOLVE seed=5 nonce=459931 elapsed_us=1559.000
+SASS seed=6 block=32 compile_us=27.500 load_us=284.000 gpu_mhs=2339.235 wall_mhs=2301.465
+SASS seed=6 block=64 compile_us=30.000 load_us=143.200 gpu_mhs=2128.621 wall_mhs=2100.276
+SASS seed=6 block=128 compile_us=24.000 load_us=139.400 gpu_mhs=2124.249 wall_mhs=2095.423
+SASS seed=6 block=256 compile_us=24.000 load_us=136.500 gpu_mhs=2219.753 wall_mhs=2186.469
+SASS seed=6 block=512 compile_us=24.400 load_us=139.400 gpu_mhs=2139.183 wall_mhs=2105.627
+SOLVE seed=6 nonce=133426 elapsed_us=838.600
+SASS seed=7 block=32 compile_us=30.200 load_us=211.400 gpu_mhs=2173.809 wall_mhs=2134.777
+SASS seed=7 block=64 compile_us=35.200 load_us=246.400 gpu_mhs=2219.753 wall_mhs=2176.287
+SASS seed=7 block=128 compile_us=35.100 load_us=168.700 gpu_mhs=2036.798 wall_mhs=2004.518
+SASS seed=7 block=256 compile_us=25.800 load_us=128.800 gpu_mhs=2230.026 wall_mhs=2188.837
+SASS seed=7 block=512 compile_us=33.800 load_us=175.200 gpu_mhs=2226.692 wall_mhs=2191.353
+SOLVE seed=7 nonce=1270706 elapsed_us=3065.200
+SOLVE seed=8 nonce=373084 elapsed_us=2762.900
+SOLVE seed=9 nonce=188518 elapsed_us=1650.500
+SOLVE seed=10 nonce=338383 elapsed_us=5133.800
+SOLVE seed=11 nonce=238948 elapsed_us=2418.200
+SOLVE seed=12 nonce=102265 elapsed_us=1607.200
+SOLVE seed=13 nonce=328386 elapsed_us=7702.800
+SOLVE seed=14 nonce=385641 elapsed_us=3924.500
+SOLVE seed=15 nonce=17770 elapsed_us=2255.900
+SOLVE seed=16 nonce=553547 elapsed_us=5734.900
+SOLVE seed=17 nonce=11884 elapsed_us=2315.400
+SOLVE seed=18 nonce=224174 elapsed_us=3057.300
+SOLVE seed=19 nonce=299119 elapsed_us=4188.600
+SOLVE seed=20 nonce=2372 elapsed_us=2265.400
+SOLVE seed=21 nonce=294204 elapsed_us=3679.300
+SOLVE seed=22 nonce=17925 elapsed_us=1692.400
+SOLVE seed=23 nonce=281377 elapsed_us=3475.900
+SOLVE seed=24 nonce=4510 elapsed_us=2268.700
+SOLVE seed=25 nonce=811042 elapsed_us=7056.300
+SOLVE seed=26 nonce=170327 elapsed_us=2966.800
+SOLVE seed=27 nonce=258488 elapsed_us=3507.000
+SOLVE seed=28 nonce=2145515 elapsed_us=15770.400
+SOLVE seed=29 nonce=12856 elapsed_us=1237.400
+SOLVE seed=30 nonce=211209 elapsed_us=2842.200
+SOLVE seed=31 nonce=541695 elapsed_us=5310.500
+VERIFIED_RANGE_CHECKS=1440 VERIFIED_FULL_SOLVES=32
+test hashx_cuda::physical::validate_and_benchmark_native_sass ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 11 filtered out; finished in 19.36s

@@ -1,0 +1,86 @@
+PAIR round=1 implementation=reference-sm86-museum
+base=0 difficulty=8 want=224 got=224
+base=0 difficulty=12 want=548 got=548
+base=0 difficulty=16 want=30948 got=30948
+base=0 difficulty=18 want=266797 got=266797
+base=0 difficulty=20 want=266797 got=266797
+base=0 difficulty=40 want=4294967295 got=4294967295
+base=1234567 difficulty=8 want=1234623 got=1234623
+base=1234567 difficulty=12 want=1240990 got=1240990
+base=1234567 difficulty=16 want=1240990 got=1240990
+base=1234567 difficulty=18 want=1426430 got=1426430
+base=1234567 difficulty=20 want=4294967295 got=4294967295
+base=1234567 difficulty=40 want=4294967295 got=4294967295
+verified=12 median_ms=7.496704 throughput_MHs=2237.946
+PAIR round=1 implementation=aot-museum-sm86
+base=0 difficulty=8 want=224 got=224
+base=0 difficulty=12 want=548 got=548
+base=0 difficulty=16 want=30948 got=30948
+base=0 difficulty=18 want=266797 got=266797
+base=0 difficulty=20 want=266797 got=266797
+base=0 difficulty=40 want=4294967295 got=4294967295
+base=1234567 difficulty=8 want=1234623 got=1234623
+base=1234567 difficulty=12 want=1240990 got=1240990
+base=1234567 difficulty=16 want=1240990 got=1240990
+base=1234567 difficulty=18 want=1426430 got=1426430
+base=1234567 difficulty=20 want=4294967295 got=4294967295
+base=1234567 difficulty=40 want=4294967295 got=4294967295
+verified=12 median_ms=3.836928 throughput_MHs=4372.565
+PAIR round=2 implementation=aot-museum-sm86
+base=0 difficulty=8 want=224 got=224
+base=0 difficulty=12 want=548 got=548
+base=0 difficulty=16 want=30948 got=30948
+base=0 difficulty=18 want=266797 got=266797
+base=0 difficulty=20 want=266797 got=266797
+base=0 difficulty=40 want=4294967295 got=4294967295
+base=1234567 difficulty=8 want=1234623 got=1234623
+base=1234567 difficulty=12 want=1240990 got=1240990
+base=1234567 difficulty=16 want=1240990 got=1240990
+base=1234567 difficulty=18 want=1426430 got=1426430
+base=1234567 difficulty=20 want=4294967295 got=4294967295
+base=1234567 difficulty=40 want=4294967295 got=4294967295
+verified=12 median_ms=3.838944 throughput_MHs=4370.269
+PAIR round=2 implementation=reference-sm86-museum
+base=0 difficulty=8 want=224 got=224
+base=0 difficulty=12 want=548 got=548
+base=0 difficulty=16 want=30948 got=30948
+base=0 difficulty=18 want=266797 got=266797
+base=0 difficulty=20 want=266797 got=266797
+base=0 difficulty=40 want=4294967295 got=4294967295
+base=1234567 difficulty=8 want=1234623 got=1234623
+base=1234567 difficulty=12 want=1240990 got=1240990
+base=1234567 difficulty=16 want=1240990 got=1240990
+base=1234567 difficulty=18 want=1426430 got=1426430
+base=1234567 difficulty=20 want=4294967295 got=4294967295
+base=1234567 difficulty=40 want=4294967295 got=4294967295
+verified=12 median_ms=7.963648 throughput_MHs=2106.725
+PAIR round=3 implementation=reference-sm86-museum
+base=0 difficulty=8 want=224 got=224
+base=0 difficulty=12 want=548 got=548
+base=0 difficulty=16 want=30948 got=30948
+base=0 difficulty=18 want=266797 got=266797
+base=0 difficulty=20 want=266797 got=266797
+base=0 difficulty=40 want=4294967295 got=4294967295
+base=1234567 difficulty=8 want=1234623 got=1234623
+base=1234567 difficulty=12 want=1240990 got=1240990
+base=1234567 difficulty=16 want=1240990 got=1240990
+base=1234567 difficulty=18 want=1426430 got=1426430
+base=1234567 difficulty=20 want=4294967295 got=4294967295
+base=1234567 difficulty=40 want=4294967295 got=4294967295
+verified=12 median_ms=7.961600 throughput_MHs=2107.267
+PAIR round=3 implementation=aot-museum-sm86
+base=0 difficulty=8 want=224 got=224
+base=0 difficulty=12 want=548 got=548
+base=0 difficulty=16 want=30948 got=30948
+base=0 difficulty=18 want=266797 got=266797
+base=0 difficulty=20 want=266797 got=266797
+base=0 difficulty=40 want=4294967295 got=4294967295
+base=1234567 difficulty=8 want=1234623 got=1234623
+base=1234567 difficulty=12 want=1240990 got=1240990
+base=1234567 difficulty=16 want=1240990 got=1240990
+base=1234567 difficulty=18 want=1426430 got=1426430
+base=1234567 difficulty=20 want=4294967295 got=4294967295
+base=1234567 difficulty=40 want=4294967295 got=4294967295
+verified=12 median_ms=3.853312 throughput_MHs=4353.973
+name, temperature.gpu, power.draw [W], clocks.current.sm [MHz], clocks.current.memory [MHz], utilization.gpu [%]
+NVIDIA GeForce RTX 3080, 51, 136.70 W, 1905 MHz, 9501 MHz, 12 %
