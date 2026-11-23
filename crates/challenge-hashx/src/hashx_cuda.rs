@@ -384,22 +384,27 @@ mod physical {
                     );
                 }
             }
-            let expected = (0..=u32::MAX)
-                .find(|&nonce| {
-                    reference.hash(u64::from(nonce)) & u64::from(difficulty_masks(18).0) == 0
-                })
-                .context("no 18-bit solution in nonce space")?;
-            // Also exercise the released search interface with a fresh cubin.
-            let start = Instant::now();
-            let actual = backend.solve(&program, &compiled, 18)?;
-            let us = start.elapsed().as_secs_f64() * 1e6;
-            anyhow::ensure!(
-                actual == expected,
-                "full solve mismatch seed={seed}: {actual} != {expected}"
-            );
-            eprintln!("SOLVE seed={seed} nonce={actual} elapsed_us={us:.3}");
+            // Compare fresh-challenge latency against the CPU baseline at
+            // equal seed and difficulty, not only fixed-work throughput.
+            for difficulty in [12, 18, 20] {
+                let masks = difficulty_masks(difficulty);
+                let wanted_mask = u64::from(masks.0) | (u64::from(masks.1) << 32);
+                let expected = (0..=u32::MAX)
+                    .find(|&nonce| reference.hash(u64::from(nonce)) & wanted_mask == 0)
+                    .context("no solution in nonce space")?;
+                let start = Instant::now();
+                let actual = backend.solve(&program, &compiled, difficulty)?;
+                let us = start.elapsed().as_secs_f64() * 1e6;
+                anyhow::ensure!(
+                    actual == expected,
+                    "full solve mismatch seed={seed}, difficulty={difficulty}: {actual} != {expected}"
+                );
+                eprintln!(
+                    "SOLVE seed={seed} difficulty={difficulty} nonce={actual} elapsed_us={us:.3}"
+                );
+            }
         }
-        eprintln!("VERIFIED_RANGE_CHECKS={verified} VERIFIED_FULL_SOLVES=32");
+        eprintln!("VERIFIED_RANGE_CHECKS={verified} VERIFIED_FULL_SOLVES=96");
         Ok(())
     }
 }

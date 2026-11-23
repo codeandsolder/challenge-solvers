@@ -126,3 +126,64 @@ Compile `nvcc --cubin -O3 -arch=sm_86 -std=c++17` and use
 `tools/compare-cubin.cpp` (CUDA Driver API, compiled with the toolkit
 headers and linked to libcuda) to test both files with the same oracle
 TSV. The tool assumes the audited 32-thread, four-argument ABI.
+
+### CPU baseline on the same RTX 3080 machine (2026-11-23)
+
+The Windows host is a Ryzen 7 3700X, eight physical cores and 16 logical
+threads. The reusable `examples/cpu_baseline.rs` uses the authoritative
+native Rust `HashX` JIT, the default 00..1f fixed seed, 1,048,576
+contiguous nonces, and 11 post-warmup median samples. All worker counts
+produced the same complete-batch checksum.
+
+| CPU workers | Native JIT MH/s | SM86 GPU / CPU |
+| --- | ---: | ---: |
+| 1 | 14.461 | 156.2 |
+| 2 | 28.642 | 78.8 |
+| 4 | 55.384 | 40.8 |
+| 8 | 78.226 | 28.9 |
+| 12 | 96.846 | 23.3 |
+| 16 | 107.423 | 21.0 |
+
+GPU reference: 2,258 MH/s measured with the same real RTX 3080 using
+32-thread blocks; this GPU test uses predicate-only reduction and
+16 x 1,048,576 candidates, whereas the CPU tests materialize a
+checksum and aggregate across worker threads. These are useful
+sustained-throughput comparisons rather than end-to-end latencies.
+
+The same executable also calls the real `hashx_cpu_jit::solve`
+for 32 independently generated four-byte seeds 0..31 and three
+difficulties, verifying each answer with the shared verifier:
+
+| Difficulty | CPU 1 worker | 8 workers | 12 workers | 16 workers |
+| --- | ---: | ---: | ---: | ---: |
+| 12 | 0.334 ms | 0.607 ms | 0.836 ms | 1.006 ms |
+| 18 | 18.721 ms | 3.322 ms | 2.667 ms | 2.870 ms |
+| 20 | 58.283 ms | 9.344 ms | 6.738 ms | 7.015 ms |
+
+The physical SM86 GPU test was extended to exactly the same 32 seeds,
+at difficulty 12, 18 and 20, and validates every minimum nonce with
+an independently interpreted CPU oracle:
+
+| Difficulty | Fastest CPU solve | SM86 GPU solve | Outcome |
+| --- | ---: | ---: | --- |
+| 12 | 0.334 ms (1 worker) | 1.834 ms | CPU 5.5x faster |
+| 18 | 2.667 ms (12 workers) | 2.853 ms | Approximately even |
+| 20 | 6.738 ms (12 workers) | 5.062 ms | GPU 1.33x faster |
+
+These are medians of 32 separate fresh puzzles on the same Windows
+machine, with CPU and GPU passes run sequentially. A previous SM86
+difficulty-18 pass gave 2.591 ms; these sub-millisecond differences
+are not meaningful absent tightly interleaved host-load control.
+The CPU benchmark includes per-challenge program compilation and
+thread startup; GPU includes emitter, cubin module loading and
+driver dispatch. A 21x sustained-throughput advantage is therefore
+not a 21x latency advantage on short challenges. The cross-over is
+near 18–20 difficulty bits with this implementation and system load.
+
+The 96 GPU full-solve checks and original 1,440 range checks all
+passed. Raw GPU latencies and seed-by-seed nonces:
+[benchmarks/sm86-20261122/gpu-difficulty-20261123.txt](benchmarks/sm86-20261122/gpu-difficulty-20261123.txt).
+
+Source and raw results:
+`examples/cpu_baseline.rs` and
+[benchmarks/sm86-20261122/cpu-3700x-windows-20261123.txt](benchmarks/sm86-20261122/cpu-3700x-windows-20261123.txt).
