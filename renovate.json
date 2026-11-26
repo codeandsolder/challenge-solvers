@@ -5,16 +5,5 @@
   ],
   "separateMultipleMajor": true,
   "prConcurrentLimit": 4,
-  "prHourlyLimit": 4,
-  "rebaseWhen": "conflicted",
-  "packageRules": [
-    {
-      "description": "Keep pre-1.0 solver/cryptography dependencies reviewable",
-      "matchManagers": [
-        "cargo"
-      ],
-      "matchCurrentVersion": "/^0\\./",
-      "automerge": false
-    }
-  ]
+  "prHourlyLimit": 4
 }
