@@ -11,7 +11,7 @@ permissions:
 jobs:
   full-backends:
     name: Full feature and accelerator regressions
-    uses: codeandsolder/ci-workflows/.github/workflows/rust-sccache.yml@ce8f8a2849c8cc0ce221e4cb283a4bef0de4a01a # main
+    uses: codeandsolder/ci-workflows/.github/workflows/rust-sccache.yml@5991b873ab28ec8fae36c2c8ef944a3f67f5f9b3 # main
     with:
       validation-tier: release
       timeout-minutes: 45
@@ -22,7 +22,7 @@ jobs:
 
   wasm-simd:
     name: WASM SIMD128 cross-compile
-    uses: codeandsolder/ci-workflows/.github/workflows/rust-sccache.yml@ce8f8a2849c8cc0ce221e4cb283a4bef0de4a01a # main
+    uses: codeandsolder/ci-workflows/.github/workflows/rust-sccache.yml@5991b873ab28ec8fae36c2c8ef944a3f67f5f9b3 # main
     with:
       validation-tier: release
       rust-targets: "wasm32-wasip1"
@@ -33,7 +33,7 @@ jobs:
 
   arm64:
     name: AArch64 portable CPU compile
-    uses: codeandsolder/ci-workflows/.github/workflows/rust-sccache.yml@ce8f8a2849c8cc0ce221e4cb283a4bef0de4a01a # main
+    uses: codeandsolder/ci-workflows/.github/workflows/rust-sccache.yml@5991b873ab28ec8fae36c2c8ef944a3f67f5f9b3 # main
     with:
       validation-tier: release
       rust-targets: "aarch64-unknown-linux-gnu"
