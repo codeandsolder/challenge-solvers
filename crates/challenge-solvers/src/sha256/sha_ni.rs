@@ -6,7 +6,9 @@ use core::arch::x86_64::{
 };
 
 #[cfg(target_arch = "x86")]
-use core::arch::x86::*;
+use core::arch::x86::{
+    __m128i, _mm_sha256msg1_epu32, _mm_sha256msg2_epu32, _mm_sha256rnds2_epu32,
+};
 
 use crate::sha256::K32;
 use core::simd::{simd_swizzle, u32x4, u64x2};
