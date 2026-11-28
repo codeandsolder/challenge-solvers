@@ -2,14 +2,7 @@
     clippy::inline_always,
     reason = "hot fixed-layout message primitives force inlining in inner solver loops"
 )]
-#![expect(
-    clippy::inconsistent_digit_grouping,
-    reason = "protocol constants preserve grouping from their source algorithms"
-)]
-#![expect(
-    clippy::collapsible_if,
-    reason = "nested conditions mirror protocol decision stages and remain easier to audit"
-)]
+
 use core::num::{NonZeroU8, NonZeroU32};
 
 use crate::{blake3, sha256};
@@ -58,7 +51,7 @@ impl IEEE754LosslessFixupPrefix {
         reason = "the fixup deliberately maps a u64 nonce into an IEEE-754 decimal representation"
     )]
     pub fn fixup(&self, nonce: u64) -> f64 {
-        let mut decimals = 0.00000_000_000_001 * nonce as f64;
+        let mut decimals = 1e-14 * nonce as f64;
         let tens = self.buf[1] - b'0';
         let ones = self.buf[2] - b'0';
         decimals += f64::from(tens * 10 + ones);
@@ -157,14 +150,12 @@ impl SingleBlockMessage {
         // but all Anubis deployments start at offset 0, so there is very good incentive to micro-optimize
         if ptr <= 35 {
             // priority 1: try to pad to an even position to minimize the need to poke 2 words for the lane ID
-            if ptr % 2 == 1 {
-                if nonce_addend.checked_mul(10_000_000_000 * 2).is_some() {
-                    nonce_addend *= 10;
-                    let pad = pop_padding_digit();
-                    nonce_addend += u64::from(pad);
-                    message[ptr] = b'0' + pad;
-                    ptr += 1;
-                }
+            if ptr % 2 == 1 && nonce_addend.checked_mul(10_000_000_000 * 2).is_some() {
+                nonce_addend *= 10;
+                let pad = pop_padding_digit();
+                nonce_addend += u64::from(pad);
+                message[ptr] = b'0' + pad;
+                ptr += 1;
             }
             // priority 2: try to pad such that the inner nonce is at a register boundary and PSHUFD shortcut can be used (minus the lane ID)
             while (ptr + 2) % 4 != 0 {
@@ -181,14 +172,14 @@ impl SingleBlockMessage {
             // priority 3: try to move the mutating part into later part of the final block to skim a couple rounds
             // times 2 because for some reason anubis uses signed nonces ... I wonder if we can send negative nonces
             while nonce_addend
-                .checked_mul(10000 * 1_000_000_000 * 2)
+                .checked_mul(10_000 * 1_000_000_000 * 2)
                 .is_some()
             {
                 let pad0 = pop_padding_digit();
                 let pad1 = pop_padding_digit();
                 let pad2 = pop_padding_digit();
                 let pad3 = pop_padding_digit();
-                nonce_addend *= 10000;
+                nonce_addend *= 10_000;
                 nonce_addend += u64::from(pad0) * 1000
                     + u64::from(pad1) * 100
                     + u64::from(pad2) * 10
@@ -372,18 +363,17 @@ impl SingleBlockMessage {
         // but all Anubis deployments start at offset 0, so there is very good incentive to micro-optimize
         if ptr <= 35 && fixup_prefix.is_none() {
             // priority 1: try to pad to an even position to minimize the need to poke 2 words for the lane ID
-            if ptr % 2 == 1 {
-                if nonce_addend
+            if ptr % 2 == 1
+                && nonce_addend
                     .checked_mul(10_000_000_000 * 2)
                     .as_ref()
                     .is_some_and(|x| *x < 1_000_000_000_000_000)
-                {
-                    nonce_addend *= 10;
-                    let pad = pop_padding_digit();
-                    nonce_addend += u64::from(pad);
-                    message[ptr] = b'0' + pad;
-                    ptr += 1;
-                }
+            {
+                nonce_addend *= 10;
+                let pad = pop_padding_digit();
+                nonce_addend += u64::from(pad);
+                message[ptr] = b'0' + pad;
+                ptr += 1;
             }
             // priority 2: try to pad such that the inner nonce is at a register boundary and PSHUFD shortcut can be used (minus the lane ID)
             while (ptr + 2) % 4 != 0 {
@@ -404,7 +394,7 @@ impl SingleBlockMessage {
             // priority 3: try to move the mutating part into later part of the final block to skim a couple rounds
             // times 2 because for some reason anubis uses signed nonces ... I wonder if we can send negative nonces
             while nonce_addend
-                .checked_mul(10000 * 1_000_000_000 * 2)
+                .checked_mul(10_000 * 1_000_000_000 * 2)
                 .as_ref()
                 .is_some_and(|x| *x < 1_000_000_000_000_000)
             {
@@ -412,7 +402,7 @@ impl SingleBlockMessage {
                 let pad1 = pop_padding_digit();
                 let pad2 = pop_padding_digit();
                 let pad3 = pop_padding_digit();
-                nonce_addend *= 10000;
+                nonce_addend *= 10_000;
                 nonce_addend += u64::from(pad0) * 1000
                     + u64::from(pad1) * 100
                     + u64::from(pad2) * 10

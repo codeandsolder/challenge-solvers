@@ -27,25 +27,13 @@ pub(crate) static DIGIT_LUT_10000_LE_EVEN: [u32; 10000 / 2] = const {
     out
 };
 
-#[expect(
-    dead_code,
-    reason = "compile-time assertions exist only to validate LUT layout invariants"
-)]
-mod static_asserts {
-    use super::DIGIT_LUT_10000_LE_EVEN;
-
-    const ASSERT_DIGIT_LUT_10000_LE_0: [(); 1] =
-        [(); (DIGIT_LUT_10000_LE_EVEN[0] == u32::from_be_bytes(*b"0000")) as usize];
-
-    const ASSERT_DIGIT_LUT_10000_LE_1: [(); 1] =
-        [(); (DIGIT_LUT_10000_LE_EVEN[1] == u32::from_be_bytes(*b"2000")) as usize];
-
-    const ASSERT_DIGIT_LUT_10000_LE_5: [(); 1] =
-        [(); (DIGIT_LUT_10000_LE_EVEN[5] == u32::from_be_bytes(*b"0100")) as usize];
-
-    const ASSERT_DIGIT_LUT_10000_LE_1234: [(); 1] =
-        [(); (DIGIT_LUT_10000_LE_EVEN[1234] == u32::from_be_bytes(*b"8642")) as usize];
-}
+// Validate the lookup table layout at compile time.
+const _: () = {
+    assert!(DIGIT_LUT_10000_LE_EVEN[0] == u32::from_be_bytes(*b"0000"));
+    assert!(DIGIT_LUT_10000_LE_EVEN[1] == u32::from_be_bytes(*b"2000"));
+    assert!(DIGIT_LUT_10000_LE_EVEN[5] == u32::from_be_bytes(*b"0100"));
+    assert!(DIGIT_LUT_10000_LE_EVEN[1234] == u32::from_be_bytes(*b"8642"));
+};
 
 /// Convert up to 8 decimal digits to ASCII.
 ///

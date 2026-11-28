@@ -45,6 +45,71 @@ pub async fn adapter_names() -> Vec<String> {
     names
 }
 
+struct PersistentPipeline {
+    pipeline: wgpu::ComputePipeline,
+    bind_group: wgpu::BindGroup,
+}
+
+impl PersistentPipeline {
+    fn create(
+        device: &wgpu::Device,
+        is_nvidia: bool,
+        workgroup_size: u32,
+        program: &wgpu::Buffer,
+        params: &wgpu::Buffer,
+        solution: &wgpu::Buffer,
+    ) -> Self {
+        let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("hashx-persistent-layout"),
+            entries: &[
+                storage_layout_entry(0, true),
+                storage_layout_entry(1, true),
+                storage_layout_entry(2, false),
+            ],
+        });
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("hashx-persistent-pipeline-layout"),
+            bind_group_layouts: &[Some(&layout)],
+            immediate_size: 0,
+        });
+        let module = create_persistent_shader_module(device, is_nvidia, workgroup_size);
+        let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some(if is_nvidia {
+                "hashx-persistent-nvidia-u32-solve"
+            } else {
+                "hashx-persistent-extmul-solve"
+            }),
+            layout: Some(&pipeline_layout),
+            module: &module,
+            entry_point: Some("solve"),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            cache: None,
+        });
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("hashx-persistent-bind"),
+            layout: &layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: program.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: params.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: solution.as_entire_binding(),
+                },
+            ],
+        });
+        Self {
+            pipeline,
+            bind_group,
+        }
+    }
+}
+
 pub struct GpuSolver {
     device: wgpu::Device,
     queue: wgpu::Queue,
@@ -53,18 +118,13 @@ pub struct GpuSolver {
     program: wgpu::Buffer,
     solution: wgpu::Buffer,
     staging: wgpu::Buffer,
-    persistent_pipeline: Option<wgpu::ComputePipeline>,
-    persistent_bind_group: Option<wgpu::BindGroup>,
+    persistent: Option<PersistentPipeline>,
     persistent_wg_size: u32,
     native_backend: Option<NativeGpuBackend>,
     persistent_implementation: &'static str,
 }
 
 impl GpuSolver {
-    #[expect(
-        clippy::too_many_lines,
-        reason = "GPU resource and pipeline construction is one audited initialization transaction"
-    )]
     /// Initialize a compatible Vulkan device and optionally the native CUDA backend.
     ///
     /// # Errors
@@ -150,55 +210,16 @@ impl GpuSolver {
             mapped_at_creation: false,
         });
 
-        let (persistent_pipeline, persistent_bind_group) = if persistent_supported {
-            let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some("hashx-persistent-layout"),
-                entries: &[
-                    storage_layout_entry(0, true),
-                    storage_layout_entry(1, true),
-                    storage_layout_entry(2, false),
-                ],
-            });
-            let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some("hashx-persistent-pipeline-layout"),
-                bind_group_layouts: &[Some(&layout)],
-                immediate_size: 0,
-            });
-            let module = create_persistent_shader_module(&device, is_nvidia, persistent_wg_size);
-            let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                label: Some(if is_nvidia {
-                    "hashx-persistent-nvidia-u32-solve"
-                } else {
-                    "hashx-persistent-extmul-solve"
-                }),
-                layout: Some(&pipeline_layout),
-                module: &module,
-                entry_point: Some("solve"),
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-                cache: None,
-            });
-            let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("hashx-persistent-bind"),
-                layout: &layout,
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: program.as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: params.as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 2,
-                        resource: solution.as_entire_binding(),
-                    },
-                ],
-            });
-            (Some(pipeline), Some(bind_group))
-        } else {
-            (None, None)
-        };
+        let persistent = persistent_supported.then(|| {
+            PersistentPipeline::create(
+                &device,
+                is_nvidia,
+                persistent_wg_size,
+                &program,
+                &params,
+                &solution,
+            )
+        });
 
         Ok(Self {
             device,
@@ -208,8 +229,7 @@ impl GpuSolver {
             program,
             solution,
             staging,
-            persistent_pipeline,
-            persistent_bind_group,
+            persistent,
             persistent_wg_size,
             native_backend,
             persistent_implementation,
@@ -229,7 +249,7 @@ impl GpuSolver {
         if let Some(native) = self.native_backend.as_ref() {
             implementations.push(native.implementation());
         }
-        if self.persistent_pipeline.is_some() {
+        if self.persistent.is_some() {
             implementations.push(self.persistent_implementation);
         }
         implementations.push(SPECIALIZED_IMPLEMENTATION);
@@ -262,7 +282,7 @@ impl GpuSolver {
             }
             if requested == self.persistent_implementation {
                 anyhow::ensure!(
-                    self.persistent_pipeline.is_some(),
+                    self.persistent.is_some(),
                     "HashX GPU implementation {requested} is unavailable on {}",
                     self.adapter
                 );
@@ -320,9 +340,7 @@ impl GpuSolver {
             }
         }
 
-        if challenge.difficulty <= PERSISTENT_CROSSOVER_DIFFICULTY
-            && self.persistent_pipeline.is_some()
-        {
+        if challenge.difficulty <= PERSISTENT_CROSSOVER_DIFFICULTY && self.persistent.is_some() {
             self.solve_persistent(
                 challenge,
                 &hashx,
@@ -351,14 +369,13 @@ impl GpuSolver {
         started: Instant,
         implementation: &'static str,
     ) -> anyhow::Result<GpuResult> {
-        let pipeline = self
-            .persistent_pipeline
+        let PersistentPipeline {
+            pipeline,
+            bind_group,
+        } = self
+            .persistent
             .as_ref()
             .context("persistent HashX pipeline unavailable")?;
-        let bind_group = self
-            .persistent_bind_group
-            .as_ref()
-            .context("persistent HashX bind group unavailable")?;
         self.queue
             .write_buffer(&self.program, 0, bytemuck::cast_slice(program));
         self.queue

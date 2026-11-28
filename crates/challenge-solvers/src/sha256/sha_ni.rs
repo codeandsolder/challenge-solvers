@@ -75,25 +75,21 @@ pub fn extract_state(state: [__m128i; 2]) -> [u32; 8] {
     [a, b, c, d, e, f, g, h]
 }
 
-#[expect(
-    unused_variables,
-    reason = "default trait lane helpers intentionally ignore lane indices overridden by specialized implementations"
-)]
 pub trait Plucker: Sized {
     #[inline(always)]
-    fn pluck_qword0(&mut self, lane: usize, w: u32x4) -> u32x4 {
+    fn pluck_qword0(&mut self, _lane: usize, w: u32x4) -> u32x4 {
         w
     }
     #[inline(always)]
-    fn pluck_qword1(&mut self, lane: usize, w: u32x4) -> u32x4 {
+    fn pluck_qword1(&mut self, _lane: usize, w: u32x4) -> u32x4 {
         w
     }
     #[inline(always)]
-    fn pluck_qword2(&mut self, lane: usize, w: u32x4) -> u32x4 {
+    fn pluck_qword2(&mut self, _lane: usize, w: u32x4) -> u32x4 {
         w
     }
     #[inline(always)]
-    fn pluck_qword3(&mut self, lane: usize, w: u32x4) -> u32x4 {
+    fn pluck_qword3(&mut self, _lane: usize, w: u32x4) -> u32x4 {
         w
     }
 }
