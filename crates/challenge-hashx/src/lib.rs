@@ -10,12 +10,10 @@
 pub mod hashx;
 /// Native `HashX` JIT search over the protocol's nonce space.
 pub mod hashx_cpu_jit;
-/// Vulkan and native SM75 CUDA backends.
+#[cfg(feature = "gpu")]
+mod hashx_cuda;
+/// Vulkan and native NVIDIA CUDA backends.
 #[cfg(feature = "gpu")]
 pub mod hashx_gpu;
 #[cfg(feature = "gpu")]
-mod hashx_gpu_native;
-#[cfg(feature = "gpu")]
-mod hashx_sm75;
-#[cfg(feature = "gpu")]
-mod hashx_sm75_cuda;
+mod hashx_sass;

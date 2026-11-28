@@ -2,7 +2,7 @@
 
 ## TuringAs
 
-`src/hashx_sm75.rs` derives NVIDIA SM75 instruction encodings and encoding layout details from TuringAs:
+`src/hashx_sass.rs` derives NVIDIA SM75 instruction encodings and encoding layout details from TuringAs:
 https://github.com/daadaada/turingas
 
 MIT License

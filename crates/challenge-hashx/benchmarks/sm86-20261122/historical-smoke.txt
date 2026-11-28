@@ -1,0 +1,26 @@
+base=0 difficulty=8 want=130 got=130
+base=0 difficulty=12 want=16091 got=16091
+base=0 difficulty=16 want=23609 got=23609
+base=0 difficulty=18 want=38006 got=38006
+base=0 difficulty=20 want=38006 got=38006
+base=0 difficulty=40 want=4294967295 got=4294967295
+base=1234567 difficulty=8 want=1234709 got=1234709
+base=1234567 difficulty=12 want=1236182 got=1236182
+base=1234567 difficulty=16 want=1301128 got=1301128
+base=1234567 difficulty=18 want=1492933 got=1492933
+base=1234567 difficulty=20 want=2084525 got=2084525
+base=1234567 difficulty=40 want=4294967295 got=4294967295
+verified=12 median_ms=7.644160 throughput_MHs=2194.776
+base=0 difficulty=8 want=81 got=81
+base=0 difficulty=12 want=335 got=335
+base=0 difficulty=16 want=80426 got=80426
+base=0 difficulty=18 want=89913 got=89913
+base=0 difficulty=20 want=488603 got=488603
+base=0 difficulty=40 want=4294967295 got=4294967295
+base=1234567 difficulty=8 want=1234592 got=1234592
+base=1234567 difficulty=12 want=1239074 got=1239074
+base=1234567 difficulty=16 want=1351885 got=1351885
+base=1234567 difficulty=18 want=1351885 got=1351885
+base=1234567 difficulty=20 want=1351885 got=1351885
+base=1234567 difficulty=40 want=4294967295 got=4294967295
+verified=12 median_ms=7.503776 throughput_MHs=2235.836

@@ -5,7 +5,7 @@ use hashwx::HashX;
 
 use crate::{
     hashx::{Answer, Challenge, GpuOp, Instr, describe, gpu_sentinel_nonce, valid_prefix},
-    hashx_gpu_native::NativeGpuBackend,
+    hashx_cuda::SassCuda,
 };
 
 const AMD_WG_SIZE: u32 = 64;
@@ -56,7 +56,7 @@ pub struct GpuSolver {
     persistent_pipeline: Option<wgpu::ComputePipeline>,
     persistent_bind_group: Option<wgpu::BindGroup>,
     persistent_wg_size: u32,
-    native_backend: Option<NativeGpuBackend>,
+    native_backend: Option<SassCuda>,
     persistent_implementation: &'static str,
 }
 
@@ -88,7 +88,7 @@ impl GpuSolver {
         };
         let info = adapter.get_info();
         let is_nvidia = info.vendor == 0x10de;
-        let native_backend = match NativeGpuBackend::create_for_adapter(&info) {
+        let native_backend = match SassCuda::create_for_adapter(&info) {
             Ok(backend) => {
                 if let Some(ref backend) = backend {
                     tracing::info!(
@@ -726,6 +726,11 @@ mod hardware_regressions {
     fn every_gpu_implementation_matches_authoritative_hashwx() -> anyhow::Result<()> {
         let mut solver = block_on(GpuSolver::create())?;
         let implementations = solver.implementations();
+        eprintln!(
+            "adapter={} implementations={}",
+            solver.adapter(),
+            implementations.join(", ")
+        );
         anyhow::ensure!(
             !implementations.is_empty(),
             "HashX GPU reported no implementations"

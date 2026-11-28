@@ -1,0 +1,26 @@
+CPU_AVAILABLE_PARALLELISM=16
+FIXED_SEED_COMPILE_US=192.200
+FIXED workers=1 hashes=1048576 median_ms=72.509300 mhps=14.461262 checksum=d3b1b8f255af0055
+FIXED workers=2 hashes=1048576 median_ms=36.610100 mhps=28.641714 checksum=d3b1b8f255af0055
+FIXED workers=4 hashes=1048576 median_ms=18.932700 mhps=55.384388 checksum=d3b1b8f255af0055
+FIXED workers=8 hashes=1048576 median_ms=13.404400 mhps=78.226254 checksum=d3b1b8f255af0055
+FIXED workers=12 hashes=1048576 median_ms=10.827300 mhps=96.845566 checksum=d3b1b8f255af0055
+FIXED workers=16 hashes=1048576 median_ms=9.761200 mhps=107.422858 checksum=d3b1b8f255af0055
+SOLVE difficulty=12 workers=1 count=32 median_ms=0.334000 min_ms=0.213300 max_ms=1.229900
+SOLVE difficulty=12 workers=2 count=32 median_ms=0.334000 min_ms=0.255300 max_ms=0.740700
+SOLVE difficulty=12 workers=4 count=32 median_ms=0.405500 min_ms=0.350200 max_ms=0.612300
+SOLVE difficulty=12 workers=8 count=32 median_ms=0.607400 min_ms=0.516900 max_ms=0.701200
+SOLVE difficulty=12 workers=12 count=32 median_ms=0.835800 min_ms=0.750700 max_ms=1.021300
+SOLVE difficulty=12 workers=16 count=32 median_ms=1.006100 min_ms=0.869600 max_ms=1.132700
+SOLVE difficulty=18 workers=1 count=32 median_ms=18.721400 min_ms=0.392700 max_ms=152.602100
+SOLVE difficulty=18 workers=2 count=32 median_ms=9.696000 min_ms=0.371600 max_ms=77.174200
+SOLVE difficulty=18 workers=4 count=32 median_ms=5.518700 min_ms=0.389500 max_ms=38.945900
+SOLVE difficulty=18 workers=8 count=32 median_ms=3.322100 min_ms=0.619800 max_ms=22.100700
+SOLVE difficulty=18 workers=12 count=32 median_ms=2.667100 min_ms=0.765400 max_ms=22.663400
+SOLVE difficulty=18 workers=16 count=32 median_ms=2.870100 min_ms=0.973600 max_ms=17.687400
+SOLVE difficulty=20 workers=1 count=32 median_ms=58.282600 min_ms=1.496700 max_ms=250.385300
+SOLVE difficulty=20 workers=2 count=32 median_ms=28.920900 min_ms=0.901800 max_ms=128.968500
+SOLVE difficulty=20 workers=4 count=32 median_ms=16.573000 min_ms=0.720000 max_ms=69.480100
+SOLVE difficulty=20 workers=8 count=32 median_ms=9.343700 min_ms=0.744700 max_ms=38.634600
+SOLVE difficulty=20 workers=12 count=32 median_ms=6.737500 min_ms=0.898200 max_ms=37.013300
+SOLVE difficulty=20 workers=16 count=32 median_ms=7.015200 min_ms=1.058000 max_ms=29.724800

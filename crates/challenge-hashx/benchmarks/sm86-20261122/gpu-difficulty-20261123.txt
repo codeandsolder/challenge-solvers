@@ -1,0 +1,142 @@
+running 1 test
+device=NVIDIA GeForce RTX 3080 target=Sm86
+SASS seed=0 block=32 compile_us=41.300 load_us=257.600 gpu_mhs=2247.771 wall_mhs=2224.623
+SASS seed=0 block=64 compile_us=23.300 load_us=113.100 gpu_mhs=2318.381 wall_mhs=2295.670
+SASS seed=0 block=128 compile_us=22.200 load_us=115.800 gpu_mhs=2300.477 wall_mhs=2277.749
+SASS seed=0 block=256 compile_us=23.000 load_us=110.300 gpu_mhs=2318.074 wall_mhs=2294.508
+SASS seed=0 block=512 compile_us=25.200 load_us=124.800 gpu_mhs=2235.503 wall_mhs=2208.458
+SOLVE seed=0 difficulty=12 nonce=897 elapsed_us=357.100
+SOLVE seed=0 difficulty=18 nonce=78777 elapsed_us=667.300
+SOLVE seed=0 difficulty=20 nonce=808214 elapsed_us=1464.700
+SASS seed=1 block=32 compile_us=24.100 load_us=236.800 gpu_mhs=2295.060 wall_mhs=2271.889
+SASS seed=1 block=64 compile_us=23.400 load_us=126.600 gpu_mhs=2281.914 wall_mhs=2253.064
+SASS seed=1 block=128 compile_us=23.700 load_us=118.200 gpu_mhs=2335.567 wall_mhs=2308.558
+SASS seed=1 block=256 compile_us=22.600 load_us=117.200 gpu_mhs=2333.934 wall_mhs=2311.803
+SASS seed=1 block=512 compile_us=22.600 load_us=110.300 gpu_mhs=2345.934 wall_mhs=2318.864
+SOLVE seed=1 difficulty=12 nonce=44 elapsed_us=306.800
+SOLVE seed=1 difficulty=18 nonce=336155 elapsed_us=1189.700
+SOLVE seed=1 difficulty=20 nonce=576859 elapsed_us=1038.600
+SASS seed=2 block=32 compile_us=28.400 load_us=185.800 gpu_mhs=2354.023 wall_mhs=2330.072
+SASS seed=2 block=64 compile_us=23.200 load_us=119.200 gpu_mhs=2329.589 wall_mhs=2306.590
+SASS seed=2 block=128 compile_us=24.700 load_us=117.400 gpu_mhs=2289.227 wall_mhs=2262.666
+SASS seed=2 block=256 compile_us=24.100 load_us=147.400 gpu_mhs=2310.219 wall_mhs=2280.412
+SASS seed=2 block=512 compile_us=22.000 load_us=133.900 gpu_mhs=2240.088 wall_mhs=2213.791
+SOLVE seed=2 difficulty=12 nonce=130 elapsed_us=344.000
+SOLVE seed=2 difficulty=18 nonce=114870 elapsed_us=706.600
+SOLVE seed=2 difficulty=20 nonce=114870 elapsed_us=578.300
+SASS seed=3 block=32 compile_us=29.100 load_us=249.600 gpu_mhs=2341.910 wall_mhs=2315.440
+SASS seed=3 block=64 compile_us=28.300 load_us=129.300 gpu_mhs=2302.741 wall_mhs=2277.935
+SASS seed=3 block=128 compile_us=26.600 load_us=130.000 gpu_mhs=2302.407 wall_mhs=2248.233
+SASS seed=3 block=256 compile_us=28.400 load_us=198.600 gpu_mhs=2299.831 wall_mhs=2273.151
+SASS seed=3 block=512 compile_us=24.200 load_us=124.600 gpu_mhs=2219.453 wall_mhs=2197.553
+SOLVE seed=3 difficulty=12 nonce=695 elapsed_us=316.800
+SOLVE seed=3 difficulty=18 nonce=49044 elapsed_us=552.900
+SOLVE seed=3 difficulty=20 nonce=49044 elapsed_us=593.000
+SASS seed=4 block=32 compile_us=27.600 load_us=231.500 gpu_mhs=2340.237 wall_mhs=2316.175
+SASS seed=4 block=64 compile_us=22.000 load_us=106.900 gpu_mhs=2287.629 wall_mhs=2265.263
+SASS seed=4 block=128 compile_us=20.200 load_us=97.500 gpu_mhs=2281.576 wall_mhs=2256.610
+SASS seed=4 block=256 compile_us=23.000 load_us=118.500 gpu_mhs=2106.725 wall_mhs=2085.292
+SASS seed=4 block=512 compile_us=24.700 load_us=117.400 gpu_mhs=2310.534 wall_mhs=2287.438
+SOLVE seed=4 difficulty=12 nonce=1955 elapsed_us=387.200
+SOLVE seed=4 difficulty=18 nonce=446420 elapsed_us=1243.600
+SOLVE seed=4 difficulty=20 nonce=943629 elapsed_us=1491.100
+SASS seed=5 block=32 compile_us=30.100 load_us=283.200 gpu_mhs=2191.840 wall_mhs=2168.888
+SASS seed=5 block=64 compile_us=30.400 load_us=151.000 gpu_mhs=2162.066 wall_mhs=2134.968
+SASS seed=5 block=128 compile_us=26.600 load_us=139.400 gpu_mhs=2332.242 wall_mhs=2284.510
+SASS seed=5 block=256 compile_us=26.900 load_us=146.900 gpu_mhs=2237.946 wall_mhs=2207.470
+SASS seed=5 block=512 compile_us=27.200 load_us=135.700 gpu_mhs=2243.154 wall_mhs=2182.203
+SOLVE seed=5 difficulty=12 nonce=1102 elapsed_us=1193.500
+SOLVE seed=5 difficulty=18 nonce=459931 elapsed_us=1522.900
+SOLVE seed=5 difficulty=20 nonce=1121789 elapsed_us=4181.900
+SASS seed=6 block=32 compile_us=30.000 load_us=467.100 gpu_mhs=403.636 wall_mhs=402.317
+SASS seed=6 block=64 compile_us=148.800 load_us=419.900 gpu_mhs=2099.192 wall_mhs=2072.899
+SASS seed=6 block=128 compile_us=24.400 load_us=146.800 gpu_mhs=2243.769 wall_mhs=2210.175
+SASS seed=6 block=256 compile_us=24.100 load_us=123.700 gpu_mhs=2281.576 wall_mhs=2252.489
+SASS seed=6 block=512 compile_us=24.600 load_us=144.500 gpu_mhs=2216.169 wall_mhs=2188.837
+SOLVE seed=6 difficulty=12 nonce=13526 elapsed_us=1952.800
+SOLVE seed=6 difficulty=18 nonce=133426 elapsed_us=845.900
+SOLVE seed=6 difficulty=20 nonce=1032547 elapsed_us=1289.700
+SASS seed=7 block=32 compile_us=27.400 load_us=240.300 gpu_mhs=2264.547 wall_mhs=2225.774
+SASS seed=7 block=64 compile_us=23.300 load_us=141.600 gpu_mhs=2219.753 wall_mhs=2197.610
+SASS seed=7 block=128 compile_us=24.300 load_us=126.300 gpu_mhs=2220.656 wall_mhs=2199.022
+SASS seed=7 block=256 compile_us=23.500 load_us=121.300 gpu_mhs=2217.331 wall_mhs=2194.133
+SASS seed=7 block=512 compile_us=23.600 load_us=136.300 gpu_mhs=2225.794 wall_mhs=2205.555
+SOLVE seed=7 difficulty=12 nonce=3167 elapsed_us=648.600
+SOLVE seed=7 difficulty=18 nonce=1270706 elapsed_us=2852.900
+SOLVE seed=7 difficulty=20 nonce=1270706 elapsed_us=6060.200
+SOLVE seed=8 difficulty=12 nonce=386 elapsed_us=874.700
+SOLVE seed=8 difficulty=18 nonce=373084 elapsed_us=4032.800
+SOLVE seed=8 difficulty=20 nonce=525451 elapsed_us=4897.800
+SOLVE seed=9 difficulty=12 nonce=1525 elapsed_us=661.200
+SOLVE seed=9 difficulty=18 nonce=188518 elapsed_us=2164.000
+SOLVE seed=9 difficulty=20 nonce=188518 elapsed_us=2190.400
+SOLVE seed=10 difficulty=12 nonce=8416 elapsed_us=4209.600
+SOLVE seed=10 difficulty=18 nonce=338383 elapsed_us=3606.900
+SOLVE seed=10 difficulty=20 nonce=338383 elapsed_us=3224.500
+SOLVE seed=11 difficulty=12 nonce=251 elapsed_us=1050.800
+SOLVE seed=11 difficulty=18 nonce=238948 elapsed_us=2891.600
+SOLVE seed=11 difficulty=20 nonce=1584722 elapsed_us=23548.200
+SOLVE seed=12 difficulty=12 nonce=8175 elapsed_us=3090.600
+SOLVE seed=12 difficulty=18 nonce=102265 elapsed_us=2530.700
+SOLVE seed=12 difficulty=20 nonce=102265 elapsed_us=3622.500
+SOLVE seed=13 difficulty=12 nonce=1509 elapsed_us=1412.400
+SOLVE seed=13 difficulty=18 nonce=328386 elapsed_us=7266.800
+SOLVE seed=13 difficulty=20 nonce=2217520 elapsed_us=12085.600
+SOLVE seed=14 difficulty=12 nonce=1432 elapsed_us=4171.900
+SOLVE seed=14 difficulty=18 nonce=385641 elapsed_us=3613.900
+SOLVE seed=14 difficulty=20 nonce=3110566 elapsed_us=21319.000
+SOLVE seed=15 difficulty=12 nonce=5960 elapsed_us=3929.000
+SOLVE seed=15 difficulty=18 nonce=17770 elapsed_us=1923.800
+SOLVE seed=15 difficulty=20 nonce=17770 elapsed_us=2566.500
+SOLVE seed=16 difficulty=12 nonce=3149 elapsed_us=2122.600
+SOLVE seed=16 difficulty=18 nonce=553547 elapsed_us=5542.700
+SOLVE seed=16 difficulty=20 nonce=2039420 elapsed_us=12606.300
+SOLVE seed=17 difficulty=12 nonce=4648 elapsed_us=2023.000
+SOLVE seed=17 difficulty=18 nonce=11884 elapsed_us=1369.800
+SOLVE seed=17 difficulty=20 nonce=55199 elapsed_us=1888.800
+SOLVE seed=18 difficulty=12 nonce=12038 elapsed_us=3654.200
+SOLVE seed=18 difficulty=18 nonce=224174 elapsed_us=4173.800
+SOLVE seed=18 difficulty=20 nonce=1169870 elapsed_us=7293.000
+SOLVE seed=19 difficulty=12 nonce=1513 elapsed_us=1085.300
+SOLVE seed=19 difficulty=18 nonce=299119 elapsed_us=3125.600
+SOLVE seed=19 difficulty=20 nonce=1163872 elapsed_us=13358.600
+SOLVE seed=20 difficulty=12 nonce=1128 elapsed_us=1701.000
+SOLVE seed=20 difficulty=18 nonce=2372 elapsed_us=1966.500
+SOLVE seed=20 difficulty=20 nonce=745304 elapsed_us=5061.900
+SOLVE seed=21 difficulty=12 nonce=1887 elapsed_us=1833.900
+SOLVE seed=21 difficulty=18 nonce=294204 elapsed_us=3361.500
+SOLVE seed=21 difficulty=20 nonce=1151533 elapsed_us=7507.500
+SOLVE seed=22 difficulty=12 nonce=5267 elapsed_us=2917.300
+SOLVE seed=22 difficulty=18 nonce=17925 elapsed_us=2054.900
+SOLVE seed=22 difficulty=20 nonce=17925 elapsed_us=2519.400
+SOLVE seed=23 difficulty=12 nonce=643 elapsed_us=1725.300
+SOLVE seed=23 difficulty=18 nonce=281377 elapsed_us=7534.400
+SOLVE seed=23 difficulty=20 nonce=281377 elapsed_us=3364.400
+SOLVE seed=24 difficulty=12 nonce=3029 elapsed_us=2246.100
+SOLVE seed=24 difficulty=18 nonce=4510 elapsed_us=1723.800
+SOLVE seed=24 difficulty=20 nonce=312133 elapsed_us=8129.300
+SOLVE seed=25 difficulty=12 nonce=1411 elapsed_us=1950.300
+SOLVE seed=25 difficulty=18 nonce=811042 elapsed_us=12158.500
+SOLVE seed=25 difficulty=20 nonce=1612220 elapsed_us=9427.200
+SOLVE seed=26 difficulty=12 nonce=148 elapsed_us=2467.000
+SOLVE seed=26 difficulty=18 nonce=170327 elapsed_us=10252.200
+SOLVE seed=26 difficulty=20 nonce=657504 elapsed_us=5158.800
+SOLVE seed=27 difficulty=12 nonce=1805 elapsed_us=1918.300
+SOLVE seed=27 difficulty=18 nonce=258488 elapsed_us=3276.200
+SOLVE seed=27 difficulty=20 nonce=781561 elapsed_us=4938.800
+SOLVE seed=28 difficulty=12 nonce=5599 elapsed_us=5629.700
+SOLVE seed=28 difficulty=18 nonce=2145515 elapsed_us=16179.900
+SOLVE seed=28 difficulty=20 nonce=3538063 elapsed_us=21472.300
+SOLVE seed=29 difficulty=12 nonce=598 elapsed_us=1561.000
+SOLVE seed=29 difficulty=18 nonce=12856 elapsed_us=1291.100
+SOLVE seed=29 difficulty=20 nonce=1304222 elapsed_us=7500.000
+SOLVE seed=30 difficulty=12 nonce=1495 elapsed_us=1336.000
+SOLVE seed=30 difficulty=18 nonce=211209 elapsed_us=2820.700
+SOLVE seed=30 difficulty=20 nonce=885026 elapsed_us=6270.100
+SOLVE seed=31 difficulty=12 nonce=5768 elapsed_us=1969.600
+SOLVE seed=31 difficulty=18 nonce=541695 elapsed_us=5142.300
+SOLVE seed=31 difficulty=20 nonce=579433 elapsed_us=5142.200
+VERIFIED_RANGE_CHECKS=1440 VERIFIED_FULL_SOLVES=96
+test hashx_cuda::physical::validate_and_benchmark_native_sass ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 11 filtered out; finished in 55.02s
